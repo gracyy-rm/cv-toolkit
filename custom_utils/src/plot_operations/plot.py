@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
 import cv2
+from ..image_operations import blend
 
 from ..image_operations import load_image
 
@@ -435,7 +436,7 @@ def bbox(image, bboxes, labels):
 
 def segment(image, masks, labels):
     """
-    Display an image with segmented object masks overlaid.
+    Display an image with segmented object masks overlaid using a custom blend function.
 
     Parameters
     ----------
@@ -499,6 +500,7 @@ def segment(image, masks, labels):
             "Image is empty."
         )
 
+    # Image must be 2D (grayscale) or 3D (color)
     if image.ndim not in (2, 3):
         raise ValueError(
             "Image must be a 2D or 3D NumPy array."
@@ -509,7 +511,7 @@ def segment(image, masks, labels):
             "Image must have 3 (RGB) or 4 (RGBA) channels."
         )
 
-    # Validate masks
+    # Validate masks structure
     if not isinstance(masks, (list, tuple)):
         raise TypeError(
             "'masks' must be a list or tuple."
@@ -520,7 +522,7 @@ def segment(image, masks, labels):
             "'masks' cannot be empty."
         )
 
-    # Validate labels
+    # Validate labels structure
     if not isinstance(labels, (list, tuple)):
         raise TypeError(
             "'labels' must be a list or tuple."
@@ -536,10 +538,10 @@ def segment(image, masks, labels):
             "'labels' and 'masks' must have the same length."
         )
 
-    # Create copy of image
+    # Create a working copy of the image so we don't overwrite the original data
     segmented_image = image.copy()
 
-    # Fixed RGB color palette
+    # Fixed RGB color palette for highlighting different masks
     COLORS = [
         (255, 0, 0),      # Red
         (0, 255, 0),      # Green
@@ -549,22 +551,21 @@ def segment(image, masks, labels):
         (0, 255, 255),    # Cyan
     ]
 
-    ALPHA = 0.5
-
+    # --- THE ACTION ZONE ---
     for index, (mask, label) in enumerate(zip(masks, labels)):
 
-        # Load mask from path
+        # Load mask from path if it's a string/Path
         if isinstance(mask, (str, Path)):
             mask = load_image(mask, mode="grayscale")
 
-        # Validate mask type
+        # Validate individual mask type
         elif not isinstance(mask, np.ndarray):
             raise TypeError(
                 f"Invalid mask for '{label}'. "
                 "Expected a NumPy ndarray, str, or pathlib.Path."
             )
 
-        # Validate mask
+        # Validate individual mask dimensions
         if mask.size == 0:
             raise ValueError(
                 f"Mask '{label}' is empty."
@@ -580,35 +581,37 @@ def segment(image, masks, labels):
                 f"Mask '{label}' must have the same height and width as the image."
             )
 
-        # Convert mask to binary
+        # 1. Look inside the mask box to check pixel values. 
+        # Greater than 0 means we found an object pixel!
         binary_mask = mask > 0
 
-        # Select color
+        # 2. Pick a distinct color for this specific object category
         color = COLORS[index % len(COLORS)]
 
-        # Create overlay for current mask
+        # 3. Create a blank black overlay canvas matching the image shape
         overlay = np.zeros_like(segmented_image)
 
-        # Paint object pixels
+        # 4. Simultaneously check coordinates: Wherever binary_mask is True, paint that pixel
         overlay[binary_mask] = color
 
-        # Blend overlay with image
-        segmented_image = cv2.addWeighted(
-            segmented_image,
-            1.0,
-            overlay,
-            ALPHA,
-            0
-        )
+        # 5. Blend the colored highlight onto the original image template
+        # -------------------------------------------------------------------------------------
+        # ORIGINAL LINE (Commented out):
+        # segmented_image = cv2.addWeighted(segmented_image, 1.0, overlay, 0.5, 0)
+        # 
+        # NEW LINE (Using your custom library function):
+        # We use alpha=0.75 so the photo retains 75% brightness, leaving 25% for the color tint.
+        segmented_image = blend(image1=segmented_image, image2=overlay, alpha=0.75)
+        # -------------------------------------------------------------------------------------
 
-        # Find top-left pixel of object
+        # 6. Locate the highest pixel coordinate of the mask to place our string text label
         points = np.argwhere(binary_mask)
 
         if len(points) > 0:
-
             y = points[:, 0].min()
             x = points[points[:, 0] == y][:, 1].min()
 
+            # Write the category name floating slightly above the object's top border
             cv2.putText(
                 segmented_image,
                 str(label),
@@ -620,9 +623,8 @@ def segment(image, masks, labels):
                 cv2.LINE_AA
             )
 
+    # Rendering the final visual result to your screen
     plt.figure(figsize=(8, 8))
     plt.imshow(segmented_image)
-    plt.axis("off")
+    plt.axis("off")  # Turn off graph ticks/coordinate borders
     plt.show()
-
-
