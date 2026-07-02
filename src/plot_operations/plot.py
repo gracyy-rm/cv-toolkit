@@ -434,6 +434,7 @@ def bbox(image, bboxes, labels):
 
 # segments
 #bbox_flag=true - more acuurate position of the mask 
+
 def segment(image, masks, labels,bbox_flag=False):
     """
     Display an image with segmented object masks overlaid using a custom blend function.
@@ -458,27 +459,11 @@ def segment(image, masks, labels,bbox_flag=False):
 
     labels : list or tuple
         Labels corresponding to each segmentation mask.
-
-    Raises
-    ------
-    TypeError
-        - If image is not a NumPy ndarray, str, or pathlib.Path.
-        - If masks is not a list or tuple.
-        - If labels is not a list or tuple.
-        - If a mask is not a NumPy ndarray, str, or pathlib.Path.
-
-    ValueError
-        - If image is empty.
-        - If image is not a 2D or 3D array.
-        - If a color image does not have 3 (RGB) or 4 (RGBA) channels.
-        - If masks is empty.
-        - If labels is empty.
-        - If labels and masks have different lengths.
-        - If a mask is empty.
-        - If a mask is not a 2D array.
-        - If a mask size does not match the image.
-
-    Returns
+    
+    bbox_flag : bool, optional
+        If True, draw bounding boxes around the segmented objects. Default is False.
+    
+     Returns
     -------
     None
         Displays the segmented image.
@@ -537,6 +522,11 @@ def segment(image, masks, labels,bbox_flag=False):
         raise ValueError(
             "'labels' and 'masks' must have the same length."
         )
+    #vallidate bbox_flag type
+    if not isinstance(bbox_flag, bool):
+        raise TypeError(
+        "'bbox_flag' must be a boolean."
+    )
 
     # Create a working copy of the image so we don't overwrite the original data
     segmented_image = image.copy()
@@ -550,6 +540,10 @@ def segment(image, masks, labels,bbox_flag=False):
         (255, 0, 255),    # Magenta
         (0, 255, 255),    # Cyan
     ]
+
+    #this came here but due to bing this inside the loop the image was gettingg blended multiple times and the color was getting washed out. So moved it outside the loop
+    # 3. Create a blank black overlay canvas matching the image shape
+    overlay = np.zeros_like(segmented_image)
 
     # --- THE ACTION ZONE ---
     for index, (mask, label) in enumerate(zip(masks, labels)):
@@ -587,31 +581,44 @@ def segment(image, masks, labels,bbox_flag=False):
 
         # 2. Pick a distinct color for this specific object category
         color = COLORS[index % len(COLORS)]
-
-        # 3. Create a blank black overlay canvas matching the image shape
-        overlay = np.zeros_like(segmented_image)
-
+        # 3. move the overlay creation outside the loop to avoid blending multiple times.
+        
         # 4. Simultaneously check coordinates: Wherever binary_mask is True, paint that pixel
         overlay[binary_mask] = color
-
+        # 5. moved the blend to blendd once only otherwise the color gets wasshed out.
         # 5. Blend the colored highlight onto the original image template
         # -------------------------------------------------------------------------------------
         # ORIGINAL LINE (Commented out):
         # segmented_image = cv2.addWeighted(segmented_image, 1.0, overlay, 0.5, 0)
         # 
         # NEW LINE (Using your custom library function):
-        # We use alpha=0.75 so the photo retains 75% brightness, leaving 25% for the color tint.
-        segmented_image = blend(image1=segmented_image, image2=overlay, alpha=0.75)
+        
         # -------------------------------------------------------------------------------------
 
         # 6. Locate the highest pixel coordinate of the mask to place our string text label
+
+        
+    # We use alpha=0.75 so the photo retains 75% brightness, leaving 25% for the color tint.
+    segmented_image = blend(image1=segmented_image, image2=overlay, alpha=0.75)
+    # ======================================
+    # Second Loop: Draw Labels & BBoxes
+    # ======================================
+    for index, (mask, label) in enumerate(zip(masks, labels)):
+
+        if isinstance(mask, (str, Path)):
+            mask = load_image(mask, mode="grayscale")
+
+        binary_mask = mask > 0
+
+        color = COLORS[index % len(COLORS)]
+
         points = np.argwhere(binary_mask)
 
         if len(points) > 0:
+
             y = points[:, 0].min()
             x = points[points[:, 0] == y][:, 1].min()
 
-            # Write the category name floating slightly above the object's top border
             cv2.putText(
                 segmented_image,
                 str(label),
@@ -622,6 +629,25 @@ def segment(image, masks, labels,bbox_flag=False):
                 2,
                 cv2.LINE_AA
             )
+
+            if bbox_flag:
+
+                ys, xs = np.where(binary_mask)
+
+                x = xs.min()
+                y = ys.min()
+
+                width = xs.max() - x + 1
+                height = ys.max() - y + 1
+
+                cv2.rectangle(
+                    segmented_image,
+                    (x, y),
+                    (x + width - 1, y + height - 1),
+                    color,
+                    2
+                )
+
 
     # Rendering the final visual result to your screen
     plt.figure(figsize=(8, 8))
