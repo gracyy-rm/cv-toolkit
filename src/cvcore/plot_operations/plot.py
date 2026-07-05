@@ -93,10 +93,19 @@ def image_row(**images):
             raise ValueError(
                 f"Image '{title}' must have 3 (RGB) or 4 (RGBA) channels."
             )
+        is_grayscale = (image.ndim == 2) or (image.ndim == 3 and image.shape[2] == 1)
+        cmap_val = "gray" if is_grayscale else None
 
-        ax.imshow(image)
+        # Squeeze out the trailing channel dimension if it's (H, W, 1) so matplotlib accepts it
+        if image.ndim == 3 and image.shape[2] == 1:
+            image = np.squeeze(image, axis=2)
+
+        ax.imshow(image, cmap=cmap_val)
+        # --------------------------------
+        
         ax.set_title(title)
         ax.axis("off")
+        
 
     plt.tight_layout()
     plt.show()
@@ -255,8 +264,15 @@ def image_grid(images, rows, cols, titles=None):
             raise ValueError(
                 f"Image '{title}' must have 3 (RGB) or 4 (RGBA) channels."
             )
+        is_grayscale = (image.ndim == 2) or (image.ndim == 3 and image.shape[2] == 1)
+        cmap_val = "gray" if is_grayscale else None
 
-        ax.imshow(image)
+        # Squeeze out single trailing channel dimensions if it's (H, W, 1)
+        if image.ndim == 3 and image.shape[2] == 1:
+            image = np.squeeze(image, axis=2)
+
+        ax.imshow(image, cmap=cmap_val)
+
         ax.set_title(title)
         ax.axis("off")
 
@@ -426,231 +442,139 @@ def bbox(image, bboxes, labels):
             2,
             cv2.LINE_AA
         )
+    is_grayscale = (annotated_image.ndim == 2) or (annotated_image.ndim == 3 and annotated_image.shape[2] == 1)
+    cmap_val = "gray" if is_grayscale else None
+
+    # Strip out single channel wrappers like (H, W, 1) so matplotlib renders cleanly
+    if annotated_image.ndim == 3 and annotated_image.shape[2] == 1:
+        annotated_image = np.squeeze(annotated_image, axis=2)
 
     plt.figure(figsize=(8, 8))
-    plt.imshow(annotated_image)
+    plt.imshow(annotated_image, cmap=cmap_val)
+
     plt.axis("off")
     plt.show()
 
 # segments
 #bbox_flag=true - more acuurate position of the mask 
-
-def segment(image, masks, labels,bbox_flag=False):
+def segment(image, masks, labels, bbox_flag=False):
     """
-    Display an image with segmented object masks overlaid using a custom blend function.
+    Overlay color-coded segmentation masks and annotations onto an image.
 
     Parameters
     ----------
     image : numpy.ndarray, str, or pathlib.Path
-        Input image. Can be:
-        - numpy.ndarray
-        - str (image path)
-        - pathlib.Path
-
-    masks : list or tuple
-        Collection of segmentation masks. Each mask can be:
-        - numpy.ndarray
-        - str (mask path)
-        - pathlib.Path
-
-        Every mask must:
-        - be a 2D array.
-        - have the same height and width as the image.
-
-    labels : list or tuple
-        Labels corresponding to each segmentation mask.
-    
+        Input image (2D grayscale, 3D RGB, or 3D RGBA).
+    masks : list or tuple of (numpy.ndarray, str, or pathlib.Path)
+        Sequence of 2D binary segmentation masks matching the image dimensions.
+    labels : list or tuple of str
+        Text labels matching each mask in the `masks` sequence.
     bbox_flag : bool, optional
-        If True, draw bounding boxes around the segmented objects. Default is False.
-    
-     Returns
+        If True, draws bounding boxes around segmented objects. Default is False.
+
+    Returns
     -------
     None
-        Displays the segmented image.
-    """
+        Renders the final visual output directly via Matplotlib.
 
-    # Load image from path
+    Raises
+    ------
+    TypeError
+        If input types for image, masks, labels, or bbox_flag are invalid.
+    ValueError
+        If shapes mismatch, files are empty, or sequence lengths do not align.
+    
+    """
+    # --- 1. Input Validation ---
     if isinstance(image, (str, Path)):
         image = load_image(image)
-
-    # Validate image type
     elif not isinstance(image, np.ndarray):
-        raise TypeError(
-            "Expected image to be a NumPy ndarray, str, or pathlib.Path."
-        )
+        raise TypeError("Expected image to be a NumPy ndarray, str, or pathlib.Path.")
 
-    # Validate image
     if image.size == 0:
-        raise ValueError(
-            "Image is empty."
-        )
+        raise ValueError("Image is empty.")
+        
+    if image.ndim not in (2, 3) or (image.ndim == 3 and image.shape[2] not in (3, 4)):
+        raise ValueError("Image must be a 2D or a 3-4 channel 3D NumPy array.")
 
-    # Image must be 2D (grayscale) or 3D (color)
-    if image.ndim not in (2, 3):
-        raise ValueError(
-            "Image must be a 2D or 3D NumPy array."
-        )
+    if not isinstance(masks, (list, tuple)) or not isinstance(labels, (list, tuple)):
+        raise TypeError("'masks' and 'labels' must be a list or tuple.")
 
-    if image.ndim == 3 and image.shape[2] not in (3, 4):
-        raise ValueError(
-            "Image must have 3 (RGB) or 4 (RGBA) channels."
-        )
-
-    # Validate masks structure
-    if not isinstance(masks, (list, tuple)):
-        raise TypeError(
-            "'masks' must be a list or tuple."
-        )
-
-    if len(masks) == 0:
-        raise ValueError(
-            "'masks' cannot be empty."
-        )
-
-    # Validate labels structure
-    if not isinstance(labels, (list, tuple)):
-        raise TypeError(
-            "'labels' must be a list or tuple."
-        )
-
-    if len(labels) == 0:
-        raise ValueError(
-            "'labels' cannot be empty."
-        )
-
-    if len(labels) != len(masks):
-        raise ValueError(
-            "'labels' and 'masks' must have the same length."
-        )
-    #vallidate bbox_flag type
+    if len(masks) == 0 or len(labels) == 0 or len(masks) != len(labels):
+        raise ValueError("'masks' and 'labels' cannot be empty and must match in length.")
+        
     if not isinstance(bbox_flag, bool):
-        raise TypeError(
-        "'bbox_flag' must be a boolean."
-    )
+        raise TypeError("'bbox_flag' must be a boolean.")
 
-    # Create a working copy of the image so we don't overwrite the original data
+    # --- 2. Setup Canvas & Palettes ---
     segmented_image = image.copy()
-
-    # Fixed RGB color palette for highlighting different masks
-    COLORS = [
-        (255, 0, 0),      # Red
-        (0, 255, 0),      # Green
-        (0, 0, 255),      # Blue
-        (255, 255, 0),    # Yellow
-        (255, 0, 255),    # Magenta
-        (0, 255, 255),    # Cyan
-    ]
-
-    #this came here but due to bing this inside the loop the image was gettingg blended multiple times and the color was getting washed out. So moved it outside the loop
-    # 3. Create a blank black overlay canvas matching the image shape
     overlay = np.zeros_like(segmented_image)
+    
+    COLORS = [
+        (255, 0, 0), (0, 255, 0), (0, 0, 255), 
+        (255, 255, 0), (255, 0, 255), (0, 255, 255)
+    ]
+    
+    # We will cache the extracted coordinates here to avoid reloading files or recalculating arrays
+    processed_objects = []
 
-    # --- THE ACTION ZONE ---
-    for index, (mask, label) in enumerate(zip(masks, labels)):
-
-        # Load mask from path if it's a string/Path
-        if isinstance(mask, (str, Path)):
-            mask = load_image(mask, mode="grayscale")
-
-        # Validate individual mask type
-        elif not isinstance(mask, np.ndarray):
-            raise TypeError(
-                f"Invalid mask for '{label}'. "
-                "Expected a NumPy ndarray, str, or pathlib.Path."
-            )
-
-        # Validate individual mask dimensions
-        if mask.size == 0:
-            raise ValueError(
-                f"Mask '{label}' is empty."
-            )
-
-        if mask.ndim != 2:
-            raise ValueError(
-                f"Mask '{label}' must be a 2D NumPy array."
-            )
-
-        if mask.shape != image.shape[:2]:
-            raise ValueError(
-                f"Mask '{label}' must have the same height and width as the image."
-            )
-
-        # 1. Look inside the mask box to check pixel values. 
-        # Greater than 0 means we found an object pixel!
-        binary_mask = mask > 0
-
-        # 2. Pick a distinct color for this specific object category
-        color = COLORS[index % len(COLORS)]
-        # 3. move the overlay creation outside the loop to avoid blending multiple times.
+    # --- 3. Pass 1: Process Masks & Construct Overlay ---
+    for index, (mask_input, label) in enumerate(zip(masks, labels)):
+        # Load mask if it's a path, otherwise use it directly
+        mask = load_image(mask_input, mode="grayscale") if isinstance(mask_input, (str, Path)) else mask_input
         
-        # 4. Simultaneously check coordinates: Wherever binary_mask is True, paint that pixel
+        if not isinstance(mask, np.ndarray) or mask.ndim != 2 or mask.shape != image.shape[:2]:
+            raise ValueError(f"Mask '{label}' must be a valid 2D NumPy array matching the image dimensions.")
+            
+        binary_mask = mask > 0
+        ys, xs = np.where(binary_mask)
+        
+        # Skip if the mask contains no true object pixels
+        if len(xs) == 0:
+            continue
+            
+        color = COLORS[index % len(COLORS)]
+        
+        # Color the overlay mask
         overlay[binary_mask] = color
-        # 5. moved the blend to blendd once only otherwise the color gets wasshed out.
-        # 5. Blend the colored highlight onto the original image template
-        # -------------------------------------------------------------------------------------
-        # ORIGINAL LINE (Commented out):
-        # segmented_image = cv2.addWeighted(segmented_image, 1.0, overlay, 0.5, 0)
-        # 
-        # NEW LINE (Using your custom library function):
         
-        # -------------------------------------------------------------------------------------
-
-        # 6. Locate the highest pixel coordinate of the mask to place our string text label
-
+        # Calculate bounding box parameters once
+        x_min, x_max = xs.min(), xs.max()
+        y_min, y_max = ys.min(), ys.max()
         
-    # We use alpha=0.75 so the photo retains 75% brightness, leaving 25% for the color tint.
+        # Find label placement: the minimum X coordinate belonging to the minimum Y coordinate
+        label_x = xs[ys == y_min].min()
+        
+        # Store for the drawing phase
+        processed_objects.append({
+            'label': str(label),
+            'color': color,
+            'label_pos': (label_x, max(y_min - 10, 0)),
+            'bbox': (x_min, y_min, x_max - x_min + 1, y_max - y_min + 1)
+        })
+
+    # --- 4. The Single Blend Operation ---
+    # Blends all masks simultaneously so colors remain crisp and clean
     segmented_image = blend(image1=segmented_image, image2=overlay, alpha=0.75)
-    # ======================================
-    # Second Loop: Draw Labels & BBoxes
-    # ======================================
-    for index, (mask, label) in enumerate(zip(masks, labels)):
 
-        if isinstance(mask, (str, Path)):
-            mask = load_image(mask, mode="grayscale")
-
-        binary_mask = mask > 0
-
-        color = COLORS[index % len(COLORS)]
-
-        points = np.argwhere(binary_mask)
-
-        if len(points) > 0:
-
-            y = points[:, 0].min()
-            x = points[points[:, 0] == y][:, 1].min()
-
-            cv2.putText(
-                segmented_image,
-                str(label),
-                (x, max(y - 10, 0)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                color,
-                2,
-                cv2.LINE_AA
+    # --- 5. Pass 2: Annotate the Blended Image ---
+    for obj in processed_objects:
+        # Draw text label
+        cv2.putText(
+            segmented_image, obj['label'], obj['label_pos'],
+            cv2.FONT_HERSHEY_SIMPLEX, 0.6, obj['color'], 2, cv2.LINE_AA
+        )
+        
+        # Draw bounding box if flagged
+        if bbox_flag:
+            x, y, w, h = obj['bbox']
+            cv2.rectangle(
+                segmented_image, (x, y), (x + w - 1, y + h - 1), obj['color'], 2
             )
 
-            if bbox_flag:
-
-                ys, xs = np.where(binary_mask)
-
-                x = xs.min()
-                y = ys.min()
-
-                width = xs.max() - x + 1
-                height = ys.max() - y + 1
-
-                cv2.rectangle(
-                    segmented_image,
-                    (x, y),
-                    (x + width - 1, y + height - 1),
-                    color,
-                    2
-                )
-
-
-    # Rendering the final visual result to your screen
+    # --- 6. Render Final Figure ---
     plt.figure(figsize=(8, 8))
     plt.imshow(segmented_image)
-    plt.axis("off")  # Turn off graph ticks/coordinate borders
+    plt.axis("off")
     plt.show()
+    

@@ -36,7 +36,7 @@ def load_image(image_path,mode='color'):
     image=cv2.imread(string_path, mode_map[mode])
 
     if image is None:
-        raise FileNotFoundError(f"Could not ope or find the image at: {string_path}")
+        raise FileNotFoundError(f"Could not open or find the image at: {string_path}")
     if mode == "color":
         image = cv2.cvtColor(image,cv2.COLOR_BGR2RGB)
     elif mode == "unchanged" and image.shape[-1] == 4:
@@ -368,3 +368,74 @@ def convert_color(
 
     return converted_image
 
+# image_statistics
+
+
+
+def image_statistics(image: np.ndarray) -> dict:
+    """
+    Compute intensity statistics for an image.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Input grayscale or color image.
+
+    Returns
+    -------
+    dict
+        Dictionary containing intensity-based image statistics.
+    """
+
+    # =========================
+    # Input Validation
+    # =========================
+
+    if not isinstance(image, np.ndarray):
+        raise TypeError(
+            f"'image' must be a NumPy array, got {type(image).__name__}."
+        )
+
+    if image.ndim not in (2, 3):
+        raise ValueError(
+            "'image' must be a 2D grayscale or 3D color image."
+        )
+
+    if image.ndim == 3 and image.shape[2] != 3:
+        raise ValueError(
+            "Color image must have exactly 3 channels."
+        )
+
+    if image.size == 0:
+        raise ValueError(
+            "'image' cannot be empty."
+        )
+
+    # =========================
+    # Convert to Grayscale
+    # =========================
+
+    if image.ndim == 3:
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+    else:
+        gray = image
+
+    # =========================
+    # Compute Statistics
+    # =========================
+
+    min_intensity = np.min(gray)
+    max_intensity = np.max(gray)
+
+    statistics = {
+        "mean_intensity": np.mean(gray),
+        "median_intensity": np.median(gray),
+        "std_intensity": np.std(gray),
+        "min_intensity": min_intensity,
+        "max_intensity": max_intensity,
+        "dynamic_range": max_intensity - min_intensity,
+        "dark_pixel_percentage": np.sum(gray < 50) / gray.size * 100,
+        "bright_pixel_percentage": np.sum(gray > 205) / gray.size * 100,
+    }
+
+    return statistics
