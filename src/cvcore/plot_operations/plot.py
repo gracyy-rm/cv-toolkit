@@ -457,7 +457,13 @@ def bbox(image, bboxes, labels):
 
 # segments
 #bbox_flag=true - more acuurate position of the mask 
-def segment(image, masks, labels, bbox_flag=False):
+#type = outline,filled,both 
+from pathlib import Path
+import numpy as np
+import cv2
+import matplotlib.pyplot as plt
+
+def segment(image, masks, labels, bbox_flag=False, segment_type="fill"):
     """
     Overlay color-coded segmentation masks and annotations onto an image.
 
@@ -471,6 +477,12 @@ def segment(image, masks, labels, bbox_flag=False):
         Text labels matching each mask in the `masks` sequence.
     bbox_flag : bool, optional
         If True, draws bounding boxes around segmented objects. Default is False.
+    segment_type : str, default="fill"
+        Controls how each segmented object is displayed.
+        Supported values are:
+        - "fill"     : Displays only the filled segmentation mask.
+        - "outline"  : Displays only the segmentation boundary.
+        - "both"     : Displays both the filled mask and its outline.
 
     Returns
     -------
@@ -483,7 +495,6 @@ def segment(image, masks, labels, bbox_flag=False):
         If input types for image, masks, labels, or bbox_flag are invalid.
     ValueError
         If shapes mismatch, files are empty, or sequence lengths do not align.
-    
     """
     # --- 1. Input Validation ---
     if isinstance(image, (str, Path)):
@@ -505,7 +516,13 @@ def segment(image, masks, labels, bbox_flag=False):
         
     if not isinstance(bbox_flag, bool):
         raise TypeError("'bbox_flag' must be a boolean.")
-
+    
+    if not isinstance(segment_type, str):
+        raise TypeError("'segment_type' must be a string.")
+        
+    if segment_type not in ["fill", "outline", "both"]:
+        raise ValueError("'segment_type' must be one of: 'fill', 'outline', or 'both'.")
+    
     # --- 2. Setup Canvas & Palettes ---
     segmented_image = image.copy()
     overlay = np.zeros_like(segmented_image)
@@ -515,12 +532,10 @@ def segment(image, masks, labels, bbox_flag=False):
         (255, 255, 0), (255, 0, 255), (0, 255, 255)
     ]
     
-    # We will cache the extracted coordinates here to avoid reloading files or recalculating arrays
     processed_objects = []
 
     # --- 3. Pass 1: Process Masks & Construct Overlay ---
     for index, (mask_input, label) in enumerate(zip(masks, labels)):
-        # Load mask if it's a path, otherwise use it directly
         mask = load_image(mask_input, mode="grayscale") if isinstance(mask_input, (str, Path)) else mask_input
         
         if not isinstance(mask, np.ndarray) or mask.ndim != 2 or mask.shape != image.shape[:2]:
@@ -529,36 +544,50 @@ def segment(image, masks, labels, bbox_flag=False):
         binary_mask = mask > 0
         ys, xs = np.where(binary_mask)
         
-        # Skip if the mask contains no true object pixels
         if len(xs) == 0:
             continue
             
         color = COLORS[index % len(COLORS)]
         
-        # Color the overlay mask
-        overlay[binary_mask] = color
+        # --- DYNAMIC SEGMENTATION TYPES ---
+        if segment_type in ["fill", "both"]:
+            # Fill the mask onto the overlay layer
+            overlay[binary_mask] = color
+            
+        if segment_type == "outline":
+            # Find perimeter contours using OpenCV
+            contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            # Draw only the boundary onto the overlay canvas (thickness=2)
+            cv2.drawContours(overlay, contours, -1, color, 2)
+        # -----------------------------------
         
-        # Calculate bounding box parameters once
         x_min, x_max = xs.min(), xs.max()
         y_min, y_max = ys.min(), ys.max()
         
-        # Find label placement: the minimum X coordinate belonging to the minimum Y coordinate
         label_x = xs[ys == y_min].min()
         
-        # Store for the drawing phase
+        # Cache contour definitions if we need to draw sharp lines on top during Pass 2
+        contours_to_draw = None
+        if segment_type == "both":
+            contours_to_draw, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
         processed_objects.append({
             'label': str(label),
             'color': color,
             'label_pos': (label_x, max(y_min - 10, 0)),
-            'bbox': (x_min, y_min, x_max - x_min + 1, y_max - y_min + 1)
+            'bbox': (x_min, y_min, x_max - x_min + 1, y_max - y_min + 1),
+            'contours': contours_to_draw
         })
 
     # --- 4. The Single Blend Operation ---
-    # Blends all masks simultaneously so colors remain crisp and clean
     segmented_image = blend(image1=segmented_image, image2=overlay, alpha=0.75)
 
     # --- 5. Pass 2: Annotate the Blended Image ---
     for obj in processed_objects:
+        # If segment_type is "both", layer the sharp solid outline right above the blend region
+        if obj['contours'] is not None:
+            cv2.drawContours(segmented_image, obj['contours'], -1, obj['color'], 2)
+
         # Draw text label
         cv2.putText(
             segmented_image, obj['label'], obj['label_pos'],
@@ -577,4 +606,3 @@ def segment(image, masks, labels, bbox_flag=False):
     plt.imshow(segmented_image)
     plt.axis("off")
     plt.show()
-    
