@@ -1,0 +1,17 @@
+{
+    "image_path": "assets/images/dog.jpg",
+    "image_width": 1362,
+    "image_height": 2421,
+    "predictions": [
+        [
+            "Animal",
+            "Pet"
+        ]
+    ],
+    "confidence_scores": [
+        [
+            0.98,
+            0.92
+        ]
+    ]
+}

@@ -1,0 +1,11 @@
+{
+    "image_path": "assets/images/flower.jpg",
+    "image_width": 5304,
+    "image_height": 7952,
+    "labels": [
+        [
+            "Plant",
+            "Nature"
+        ]
+    ]
+}

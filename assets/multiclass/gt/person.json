@@ -1,0 +1,8 @@
+{
+    "image_path": "assets/images/person.jpg",
+    "image_width": 3000,
+    "image_height": 1987,
+    "labels": [
+        "Person"
+    ]
+}

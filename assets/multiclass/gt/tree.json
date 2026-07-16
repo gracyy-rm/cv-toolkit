@@ -1,0 +1,8 @@
+{
+    "image_path": "assets/images/tree.jpg",
+    "image_width": 3741,
+    "image_height": 2494,
+    "labels": [
+        "Tree"
+    ]
+}

@@ -1,0 +1,8 @@
+{
+    "image_path": "assets/images/bicycle.jpg",
+    "image_width": 3376,
+    "image_height": 6000,
+    "labels": [
+        "Bicycle"
+    ]
+}

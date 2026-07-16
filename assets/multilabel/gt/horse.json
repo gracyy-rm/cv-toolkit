@@ -1,0 +1,11 @@
+{
+    "image_path": "assets/images/horse.jpg",
+    "image_width": 4652,
+    "image_height": 3105,
+    "labels": [
+        [
+            "Animal",
+            "Farm"
+        ]
+    ]
+}

@@ -1,0 +1,17 @@
+{
+    "image_path": "assets/images/horse.jpg",
+    "image_width": 4652,
+    "image_height": 3105,
+    "predictions": [
+        [
+            "Animal",
+            "Pet"
+        ]
+    ],
+    "confidence_scores": [
+        [
+            0.88,
+            0.71
+        ]
+    ]
+}

@@ -1,0 +1,11 @@
+{
+    "image_path": "assets/images/bus.jpg",
+    "image_width": 4000,
+    "image_height": 3000,
+    "labels": [
+        [
+            "Vehicle",
+            "Public Transport"
+        ]
+    ]
+}

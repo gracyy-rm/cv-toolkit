@@ -1,0 +1,17 @@
+{
+    "image_path": "assets/images/bird.jpg",
+    "image_width": 4912,
+    "image_height": 3264,
+    "predictions": [
+        [
+            "Animal",
+            "Flying"
+        ]
+    ],
+    "confidence_scores": [
+        [
+            0.99,
+            0.95
+        ]
+    ]
+}

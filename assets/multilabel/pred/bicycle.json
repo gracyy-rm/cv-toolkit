@@ -1,0 +1,15 @@
+{
+    "image_path": "assets/images/bicycle.jpg",
+    "image_width": 3376,
+    "image_height": 6000,
+    "predictions": [
+        [
+            "Vehicle"
+        ]
+    ],
+    "confidence_scores": [
+        [
+            0.92
+        ]
+    ]
+}

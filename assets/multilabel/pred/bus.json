@@ -1,0 +1,17 @@
+{
+    "image_path": "assets/images/bus.jpg",
+    "image_width": 4000,
+    "image_height": 3000,
+    "predictions": [
+        [
+            "Vehicle",
+            "Heavy"
+        ]
+    ],
+    "confidence_scores": [
+        [
+            0.9,
+            0.72
+        ]
+    ]
+}

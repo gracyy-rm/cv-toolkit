@@ -1,0 +1,8 @@
+{
+    "image_path": "assets/images/traffic_light.jpg",
+    "image_width": 3240,
+    "image_height": 4050,
+    "labels": [
+        "Traffic Light"
+    ]
+}

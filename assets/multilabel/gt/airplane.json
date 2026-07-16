@@ -1,0 +1,11 @@
+{
+    "image_path": "assets/images/airplane.jpg",
+    "image_width": 3360,
+    "image_height": 4200,
+    "labels": [
+        [
+            "Vehicle",
+            "Flying"
+        ]
+    ]
+}

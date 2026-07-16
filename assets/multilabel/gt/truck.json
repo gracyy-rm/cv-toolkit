@@ -1,0 +1,11 @@
+{
+    "image_path": "assets/images/truck.jpg",
+    "image_width": 3024,
+    "image_height": 3015,
+    "labels": [
+        [
+            "Vehicle",
+            "Heavy"
+        ]
+    ]
+}

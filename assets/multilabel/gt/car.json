@@ -1,0 +1,11 @@
+{
+    "image_path": "assets/images/car.jpg",
+    "image_width": 8403,
+    "image_height": 3952,
+    "labels": [
+        [
+            "Vehicle",
+            "Road"
+        ]
+    ]
+}

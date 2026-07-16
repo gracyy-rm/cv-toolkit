@@ -1,0 +1,16 @@
+image_path,binary_label,binary_pred,binary_score,multiclass_label,multiclass_pred,multiclass_score,multilabel_label,multilabel_pred,multilabel_score
+assets/images/dog.jpg,Day,Day,0.97,Dog,Dog,0.95,"[""Animal"", ""Pet""]","[""Animal"", ""Pet""]","[0.98, 0.92]"
+assets/images/cat.jpg,Day,Day,0.96,Cat,Dog,0.83,"[""Animal"", ""Pet""]","[""Animal""]",[0.94]
+assets/images/bird.jpg,Day,Day,0.98,Bird,Bird,0.97,"[""Animal"", ""Flying""]","[""Animal"", ""Flying""]","[0.99, 0.95]"
+assets/images/horse.jpg,Day,Day,0.94,Horse,Horse,0.92,"[""Animal"", ""Farm""]","[""Animal"", ""Pet""]","[0.88, 0.71]"
+assets/images/car.jpg,Night,Night,0.99,Car,Car,0.98,"[""Vehicle"", ""Road""]","[""Vehicle"", ""Road""]","[0.99, 0.97]"
+assets/images/bus.jpg,Night,Night,0.95,Bus,Truck,0.76,"[""Vehicle"", ""Public Transport""]","[""Vehicle"", ""Heavy""]","[0.90, 0.72]"
+assets/images/truck.jpg,Night,Night,0.97,Truck,Truck,0.96,"[""Vehicle"", ""Heavy""]","[""Vehicle"", ""Heavy""]","[0.98, 0.93]"
+assets/images/bicycle.jpg,Night,Night,0.93,Bicycle,Bicycle,0.91,"[""Vehicle"", ""Eco-Friendly""]","[""Vehicle""]",[0.92]
+assets/images/person.jpg,Day,Day,0.98,Person,Person,0.97,"[""Human"", ""Living""]","[""Human"", ""Living""]","[0.98, 0.95]"
+assets/images/tree.jpg,Day,Day,0.96,Tree,Flower,0.62,"[""Plant"", ""Nature""]","[""Plant"", ""Tree""]","[0.91, 0.86]"
+assets/images/flower.jpg,Day,Day,0.95,Flower,Flower,0.94,"[""Plant"", ""Nature""]","[""Nature""]",[0.90]
+assets/images/house.jpg,Day,Night,0.68,House,House,0.96,"[""Building"", ""Man-made""]","[""Building""]",[0.94]
+assets/images/airplane.jpg,Night,Day,0.98,Airplane,Airplane,0.97,"[""Vehicle"", ""Flying""]","[""Vehicle"", ""Flying""]","[0.98, 0.94]"
+assets/images/boat.jpg,Night,Night,0.96,Boat,Boat,0.95,"[""Vehicle"", ""Water""]","[""Vehicle"", ""Road""]","[0.93, 0.62]"
+assets/images/traffic_light.jpg,Day,Day,0.97,Traffic Light,Traffic Light,0.96,"[""Road"", ""Infrastructure""]","[""Road""]",[0.91]

@@ -1,0 +1,8 @@
+{
+    "image_path": "D:\\CV_projects\\assets\\g.jpg",
+    "image_width": 1920,
+    "image_height": 1080,
+    "predictions": ["cat"],
+    "confidence_scores": [0.85]
+}
+

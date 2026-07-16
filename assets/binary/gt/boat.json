@@ -1,0 +1,8 @@
+{
+    "image_path": "assets/images/boat.jpg",
+    "image_width": 5568,
+    "image_height": 3712,
+    "labels": [
+        "Night"
+    ]
+}

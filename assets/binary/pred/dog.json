@@ -1,0 +1,11 @@
+{
+    "image_path": "assets/images/dog.jpg",
+    "image_width": 1362,
+    "image_height": 2421,
+    "predictions": [
+        "Day"
+    ],
+    "confidence_scores": [
+        0.97
+    ]
+}

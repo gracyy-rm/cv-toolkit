@@ -1,0 +1,15 @@
+{
+    "image_path": "assets/images/house.jpg",
+    "image_width": 4032,
+    "image_height": 3024,
+    "predictions": [
+        [
+            "Building"
+        ]
+    ],
+    "confidence_scores": [
+        [
+            0.94
+        ]
+    ]
+}

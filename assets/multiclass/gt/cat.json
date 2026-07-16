@@ -1,0 +1,8 @@
+{
+    "image_path": "assets/images/cat.jpg",
+    "image_width": 4111,
+    "image_height": 6167,
+    "labels": [
+        "Cat"
+    ]
+}
