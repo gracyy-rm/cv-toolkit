@@ -672,7 +672,10 @@ class DatasetEvaluator:
                         "bbox": prediction["bbox"]
                     })
 
-        if gt_count == 0 or not predictions:
+        if gt_count == 0:
+            return None
+
+        if not predictions:
             return 0.0
 
         predictions = sorted(
@@ -755,9 +758,8 @@ class DatasetEvaluator:
         if not ap_results:
             return 0.0
 
-        return float(
-            np.mean([result["ap"] for result in ap_results])
-        )
+        valid_aps = [result["ap"] for result in ap_results if result["ap"] is not None]
+        return float(np.mean(valid_aps)) if valid_aps else 0.0
 
     def calculate_map_50_95(self):
         iou_thresholds = np.arange(0.5, 1.0, 0.05)
