@@ -37,6 +37,11 @@ class ImageEvaluator:
         else:
             self.pred_path = None
             self.pred_data = pred_path_or_data
+        gt_id = self.gt_data.get("image_id") or (self.gt_path.stem if self.gt_path else None)
+        pred_id = self.pred_data.get("image_id") or (self.pred_path.stem if self.pred_path else None)
+
+        if gt_id and pred_id and gt_id != pred_id:
+            raise ValueError(f"Mismatched image pair! GT is '{gt_id}' but Pred is '{pred_id}'.")
 
         self.label_mapping = self._build_label_mapping()
         self.results = None
@@ -437,7 +442,10 @@ class DatasetEvaluator:
         self.overall_df = None
         self.per_class_df = None
         self.ap_df = None
+        self.map_50_95 = None
+        self.map_50 = None
         self.all_image_object = {}
+        self.results=None
 
     def _discover_pairs(self):
         pairs = {}
@@ -737,6 +745,7 @@ class DatasetEvaluator:
             "map_50": map_50,
             "map_50_95": map_50_95
         }
+        self.results = results
 
         self.overall_df = pd.DataFrame([
             [
@@ -773,7 +782,7 @@ class DatasetEvaluator:
             print("\nDATASET-LEVEL mAP\n")
             print(tabulate([["mAP@0.5", round(map_50, 4)], ["mAP@0.5:0.95", round(map_50_95, 4)]], headers=["Metric", "Score"], tablefmt="grid"))
 
-        return results
+        return None
 
     def filter(self, class_names, model_confidence_threshold, metric, eq, class_confidence_threshold):
         """
