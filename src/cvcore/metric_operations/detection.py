@@ -10,7 +10,8 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 from tabulate import tabulate
-
+from concurrent.futures import ThreadPoolExecutor
+from typing import Optional 
 try:
     from tqdm import tqdm
 except ImportError:
@@ -428,10 +429,11 @@ class DatasetEvaluator:
         "!=": operator.ne,
     }
 
-    def __init__(self, gt_dir, pred_dir, iou_threshold=0.5):
+    def __init__(self, gt_dir, pred_dir, iou_threshold=0.5, num_workers: Optional[int] = None):
         self.gt_dir = Path(gt_dir)
         self.pred_dir = Path(pred_dir)
         self.iou_threshold = iou_threshold
+        self.num_workers = num_workers
 
         # Discovers file pairs without loading full JSON contents into memory
         self.image_files = self._discover_pairs()
@@ -613,34 +615,64 @@ class DatasetEvaluator:
         ap = np.sum((mrec[indices + 1] - mrec[indices]) * mpre[indices + 1])
         return float(ap)
 
-    def get_stat(self, iou=0.5, confidence_thresholds=None, return_stat=True):
+    
+    @staticmethod
+    def _process_single_image(args):
+        image_id, gt_path, pred_path, iou_thresh, conf_threshs = args
+        img_eval = ImageEvaluator(gt_path, pred_path, iou_threshold=iou_thresh)
+        img_eval.get_stat(iou=iou_thresh, confidence_thresholds=conf_threshs, return_stat=False)
+        return image_id, img_eval
+
+    def get_stat(self, iou=0.5, confidence_thresholds=None, return_stat=True, num_workers=None):
         """
-        Requirement 2: Runs loop on zip to create self.all_image_object as {image_id: image_evaluator_object},
-        aggregates metrics via self.calculate_metrics(), computes AP/mAP, and generates DataFrames.
+        Executes multi-threaded evaluation across all active images using ThreadPoolExecutor and tqdm.
         """
         if confidence_thresholds is None:
-            confidence_thresholds = [0.25, 0.5, 0.75]
+            confidence_thresholds = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 0.9]
         self.iou_threshold = iou
 
-        # Build paths list and run loop on the zip
-        gt_paths = [self.image_files[img_id][0] for img_id in self.active_image_ids]
-        pred_paths = [self.image_files[img_id][1] for img_id in self.active_image_ids]
+        workers = num_workers if num_workers is not None else self.num_workers
+
+        # Build task parameters for each image
+        tasks = [
+            (
+                img_id,
+                self.image_files[img_id][0],
+                self.image_files[img_id][1],
+                self.iou_threshold,
+                confidence_thresholds,
+            )
+            for img_id in self.active_image_ids
+        ]
 
         self.all_image_object = {}
-        for image_id, gt_path, pred_path in zip(
-            self.active_image_ids, gt_paths, pred_paths
-        ):
-            img_eval = ImageEvaluator(gt_path, pred_path, iou_threshold=self.iou_threshold)
-            img_eval.get_stat(iou=self.iou_threshold, confidence_thresholds=confidence_thresholds, return_stat=False)
-            self.all_image_object[image_id] = img_eval
-            self.label_mapping.update(img_eval.label_mapping)
 
-        # Requirement 3: Aggregation of tp, fp, fn into dataset-level and class-level metrics
+        # Run multi-threaded loading and matching with tqdm progress bar
+        if workers == 1:
+            # Single-threaded mode (useful for debugging)
+            for task in tqdm(tasks, desc="Evaluating dataset", unit="img"):
+                image_id, img_eval = self._process_single_image(task)
+                self.all_image_object[image_id] = img_eval
+                self.label_mapping.update(img_eval.label_mapping)
+        else:
+            # Multi-threaded concurrent execution
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                # executor.map preserves the original image ordering while running in parallel
+                for image_id, img_eval in tqdm(
+                    executor.map(self._process_single_image, tasks),
+                    total=len(tasks),
+                    desc="Evaluating dataset",
+                    unit="img",
+                ):
+                    self.all_image_object[image_id] = img_eval
+                    self.label_mapping.update(img_eval.label_mapping)
+
+        # Dataset-level metric aggregation
         metric_results = self.calculate_metrics(confidence_thresholds=confidence_thresholds)
         overall_results = metric_results["overall"]
         per_class_results = metric_results["per_class"]
 
-        # Compute AP and mAP across the dataset from in-memory objects
+        # Compute AP and mAP across the dataset
         map_iou_thresholds = [round(float(x), 2) for x in np.arange(0.5, 1.0, 0.05)]
         ap_preds = {}
         class_gt_counts = {}
@@ -721,7 +753,7 @@ class DatasetEvaluator:
                 "class_id": cid,
                 "class_name": self.label_mapping.get(cid, str(cid)),
                 "iou_threshold": self.iou_threshold,
-                "ap": ap_val
+                "ap": ap_val,
             })
 
         valid_aps = [r["ap"] for r in ap_results if r["ap"] is not None]
@@ -743,8 +775,9 @@ class DatasetEvaluator:
             "per_class": per_class_results,
             "ap": ap_results,
             "map_50": map_50,
-            "map_50_95": map_50_95
+            "map_50_95": map_50_95,
         }
+
         self.results = results
 
         self.overall_df = pd.DataFrame([
@@ -752,7 +785,7 @@ class DatasetEvaluator:
                 r["confidence_threshold"], r["gt_count"], r["prediction_count"],
                 r["tp"], r["fp"], r["fn"],
                 round(r["precision"], 4), round(r["recall"], 4),
-                round(r["f1_score"], 4), round(r["mean_iou"], 4)
+                round(r["f1_score"], 4), round(r["mean_iou"], 4),
             ]
             for r in overall_results
         ], columns=["Confidence", "GT", "Predictions", "TP", "FP", "FN", "Precision", "Recall", "F1", "Mean IoU"])
@@ -762,7 +795,7 @@ class DatasetEvaluator:
                 r["confidence_threshold"], r["class_name"], r["gt_count"], r["prediction_count"],
                 r["tp"], r["fp"], r["fn"],
                 round(r["precision"], 4), round(r["recall"], 4),
-                round(r["f1_score"], 4), round(r["mean_iou"], 4)
+                round(r["f1_score"], 4), round(r["mean_iou"], 4),
             ]
             for r in per_class_results
         ], columns=["Confidence", "Class Name", "GT", "Predictions", "TP", "FP", "FN", "Precision", "Recall", "F1", "Mean IoU"])
@@ -786,7 +819,7 @@ class DatasetEvaluator:
 
     def filter(self, class_names, model_confidence_threshold, metric, eq, class_confidence_threshold):
         """
-        Requirement 4: Runs loop on all self.all_image_object and based on class metric eq,
+        Runs loop on all self.all_image_object and based on class metric eq,
         extracts matching image objects.
         IMMUTABLE: Returns a NEW DatasetEvaluator instance containing only the matching images.
         """
@@ -848,26 +881,89 @@ class DatasetEvaluator:
         new_evaluator.ap_df = None
         return new_evaluator
 
-    def plot(self, num_samples=5, confidence_threshold=0.25, random_sample=True, show=True):
+    def plot(
+        self,
+        num_samples=5,
+        confidence_threshold=0.25,
+        random_sample=True,
+        class_names=None,
+        model_confidence_threshold=None,
+        show=True,
+    ):
         """
-        Requirement 5: Simple function responsible for plotting images randomly
-        by taking key-value pairs from all_image_object of DatasetEvaluator.
+        Plots sample images. If class_names is provided, it only samples
+        images where that class appears in Ground Truth or Predictions at the given confidence.
         """
+        # Ensure image objects are loaded in memory
+        if not self.all_image_object:
+            self.get_stat(return_stat=False)
+
         if not self.all_image_object:
             print("No image objects available to plot.")
             return
 
-        items = list(self.all_image_object.items())
-        num_samples = min(num_samples, len(items))
+        # Determine effective confidence threshold
+        plot_conf = (
+            model_confidence_threshold
+            if model_confidence_threshold is not None
+            else confidence_threshold
+        )
 
+        candidate_items = list(self.all_image_object.items())
+
+        # If class_names is specified, filter to images relevant to that class
+        if class_names is not None:
+            if not isinstance(class_names, (list, tuple, set)):
+                class_names_list = [class_names]
+            else:
+                class_names_list = list(class_names)
+
+            # Map class names to class IDs
+            name_to_cid = {v.lower(): k for k, v in self.label_mapping.items()}
+            target_class_ids = set()
+            for c in class_names_list:
+                if isinstance(c, int):
+                    target_class_ids.add(c)
+                elif str(c).isdigit():
+                    target_class_ids.add(int(c))
+                elif isinstance(c, str):
+                    c_lower = c.strip().lower()
+                    if c_lower in name_to_cid:
+                        target_class_ids.add(name_to_cid[c_lower])
+
+            # Keep only images where the class appears in GT or in Predictions (>= plot_conf)
+            filtered_candidates = []
+            for image_id, img_obj in candidate_items:
+                has_gt = any(
+                    ann.get("class_id") in target_class_ids
+                    for ann in img_obj.gt_data.get("annotations", [])
+                )
+                has_pred = any(
+                    p.get("class_id") in target_class_ids
+                    and p.get("confidence", 0.0) >= plot_conf
+                    for p in img_obj.pred_data.get("predictions", [])
+                )
+
+                if has_gt or has_pred:
+                    filtered_candidates.append((image_id, img_obj))
+
+            candidate_items = filtered_candidates
+
+            if not candidate_items:
+                print(f"No images found containing class '{class_names}' at confidence >= {plot_conf}")
+                return
+
+        # Sample images
+        num_samples = min(num_samples, len(candidate_items))
         if random_sample:
-            sampled_items = random.sample(items, num_samples)
+            sampled_items = random.sample(candidate_items, num_samples)
         else:
-            sampled_items = items[:num_samples]
+            sampled_items = candidate_items[:num_samples]
 
+        title_suffix = f" ({class_names})" if class_names is not None else ""
         for image_id, img_obj in sampled_items:
             img_obj.plot(
-                confidence_threshold=confidence_threshold,
-                title_prefix=f"[{image_id}] ",
-                show=show
+                confidence_threshold=plot_conf,
+                title_prefix=f"[{image_id}]{title_suffix} ",
+                show=show,
             )
