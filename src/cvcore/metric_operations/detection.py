@@ -2,7 +2,9 @@ import copy
 import json
 import operator
 import random
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Optional
 
 import matplotlib.patches as patches
 import matplotlib.pyplot as plt
@@ -10,8 +12,7 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 from tabulate import tabulate
-from concurrent.futures import ThreadPoolExecutor
-from typing import Optional 
+
 try:
     from tqdm import tqdm
 except ImportError:
@@ -21,10 +22,10 @@ except ImportError:
 
 class ImageEvaluator:
 
-    def __init__(self, gt_path_or_data, pred_path_or_data, iou_threshold=0.5):
-        self.iou_threshold = iou_threshold
+    def __init__(self, gt_path_or_data, pred_path_or_data, threshold=0.5, metric_type="iou"):
+        self.threshold = threshold
+        self.metric_type = metric_type.lower().strip()
 
-        # Accepts either file paths or preloaded dicts to avoid redundant disk reads
         if isinstance(gt_path_or_data, (str, Path)):
             self.gt_path = Path(gt_path_or_data)
             self.gt_data = self._load_json(self.gt_path)
@@ -38,6 +39,7 @@ class ImageEvaluator:
         else:
             self.pred_path = None
             self.pred_data = pred_path_or_data
+
         gt_id = self.gt_data.get("image_id") or (self.gt_path.stem if self.gt_path else None)
         pred_id = self.pred_data.get("image_id") or (self.pred_path.stem if self.pred_path else None)
 
@@ -77,7 +79,25 @@ class ImageEvaluator:
         union = area1 + area2 - intersection
         return intersection / union if union > 0 else 0.0
 
-    def match_predictions(self, confidence_threshold):
+    @staticmethod
+    def calculate_ios(box1, box2):
+        x1 = max(box1[0], box2[0])
+        y1 = max(box1[1], box2[1])
+        x2 = min(box1[2], box2[2])
+        y2 = min(box1[3], box2[3])
+
+        intersection = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+        area1 = max(0.0, box1[2] - box1[0]) * max(0.0, box1[3] - box1[1])
+        area2 = max(0.0, box2[2] - box2[0]) * max(0.0, box2[3] - box2[1])
+
+        min_area = min(area1, area2)
+        return intersection / min_area if min_area > 0 else 0.0
+
+    def match_predictions(self, confidence_threshold, threshold=None, metric_type=None):
+        eff_threshold = threshold if threshold is not None else self.threshold
+        eff_metric = metric_type.lower().strip() if metric_type is not None else self.metric_type
+        eval_fn = self.calculate_ios if eff_metric == "ios" else self.calculate_iou
+
         predictions = [
             (index, prediction)
             for index, prediction in enumerate(self.pred_data.get("predictions", []))
@@ -85,18 +105,18 @@ class ImageEvaluator:
         ]
 
         predictions.sort(
-            key=lambda item: item[1]["confidence"],
+            key=lambda item: item[1].get("confidence", 0.0),
             reverse=True
         )
 
         ground_truths = self.gt_data.get("annotations", [])
         matched_gt_indices = set()
-        matched_ious = []
+        matched_scores = []
         matches = []
         tp = fp = 0
 
         for pred_index, prediction in predictions:
-            best_iou = 0.0
+            best_score = 0.0
             best_gt_index = None
 
             for gt_index, ground_truth in enumerate(ground_truths):
@@ -106,18 +126,15 @@ class ImageEvaluator:
                 if prediction["class_id"] != ground_truth["class_id"]:
                     continue
 
-                iou = self.calculate_iou(
-                    prediction["bbox"],
-                    ground_truth["bbox"]
-                )
+                score = eval_fn(prediction["bbox"], ground_truth["bbox"])
 
-                if iou > best_iou:
-                    best_iou = iou
+                if score > best_score:
+                    best_score = score
                     best_gt_index = gt_index
 
-            if best_gt_index is not None and best_iou >= self.iou_threshold:
+            if best_gt_index is not None and best_score >= eff_threshold:
                 matched_gt_indices.add(best_gt_index)
-                matched_ious.append(best_iou)
+                matched_scores.append(best_score)
                 tp += 1
                 status = "TP"
             else:
@@ -127,8 +144,8 @@ class ImageEvaluator:
             matches.append({
                 "prediction_index": pred_index,
                 "gt_index": best_gt_index if status == "TP" else None,
-                "confidence": prediction["confidence"],
-                "iou": best_iou,
+                "confidence": prediction.get("confidence", 0.0),
+                "score": best_score,
                 "status": status,
                 "class_id": prediction["class_id"]
             })
@@ -141,11 +158,16 @@ class ImageEvaluator:
             "tp": tp,
             "fp": fp,
             "fn": fn,
-            "matched_ious": matched_ious,
-            "matches": matches
+            "matched_scores": matched_scores,
+            "matches": matches,
+            "metric_type": eff_metric
         }
 
-    def match_class_predictions(self, class_id, confidence_threshold):
+    def match_class_predictions(self, class_id, confidence_threshold, threshold=None, metric_type=None):
+        eff_threshold = threshold if threshold is not None else self.threshold
+        eff_metric = metric_type.lower().strip() if metric_type is not None else self.metric_type
+        eval_fn = self.calculate_ios if eff_metric == "ios" else self.calculate_iou
+
         ground_truths = [
             (index, ground_truth)
             for index, ground_truth in enumerate(self.gt_data.get("annotations", []))
@@ -160,34 +182,31 @@ class ImageEvaluator:
         ]
 
         predictions.sort(
-            key=lambda item: item[1]["confidence"],
+            key=lambda item: item[1].get("confidence", 0.0),
             reverse=True
         )
 
         matched_gt_indices = set()
-        matched_ious = []
+        matched_scores = []
         tp = fp = 0
 
         for _, prediction in predictions:
-            best_iou = 0.0
+            best_score = 0.0
             best_gt_index = None
 
             for gt_index, ground_truth in ground_truths:
                 if gt_index in matched_gt_indices:
                     continue
 
-                iou = self.calculate_iou(
-                    prediction["bbox"],
-                    ground_truth["bbox"]
-                )
+                score = eval_fn(prediction["bbox"], ground_truth["bbox"])
 
-                if iou > best_iou:
-                    best_iou = iou
+                if score > best_score:
+                    best_score = score
                     best_gt_index = gt_index
 
-            if best_gt_index is not None and best_iou >= self.iou_threshold:
+            if best_gt_index is not None and best_score >= eff_threshold:
                 matched_gt_indices.add(best_gt_index)
-                matched_ious.append(best_iou)
+                matched_scores.append(best_score)
                 tp += 1
             else:
                 fp += 1
@@ -200,7 +219,8 @@ class ImageEvaluator:
             "tp": tp,
             "fp": fp,
             "fn": len(ground_truths) - len(matched_gt_indices),
-            "matched_ious": matched_ious
+            "matched_scores": matched_scores,
+            "metric_type": eff_metric
         }
 
     @staticmethod
@@ -216,10 +236,10 @@ class ImageEvaluator:
             if precision + recall > 0 else 0.0
         )
 
-        matched_ious = match_result["matched_ious"]
-        mean_iou = (
-            sum(matched_ious) / len(matched_ious)
-            if matched_ious else 0.0
+        matched_scores = match_result.get("matched_scores", [])
+        mean_score = (
+            sum(matched_scores) / len(matched_scores)
+            if matched_scores else 0.0
         )
 
         return {
@@ -231,10 +251,11 @@ class ImageEvaluator:
             "precision": precision,
             "recall": recall,
             "f1_score": f1_score,
-            "mean_iou": mean_iou
+            "mean_score": mean_score,
+            "metric_type": match_result.get("metric_type", "iou").upper()
         }
 
-    def get_per_class_stat(self, confidence_threshold):
+    def get_per_class_stat(self, confidence_threshold, threshold=None, metric_type=None):
         filtered_predictions = [
             prediction
             for prediction in self.pred_data.get("predictions", [])
@@ -255,48 +276,63 @@ class ImageEvaluator:
         for class_id in sorted(class_ids):
             result = self.match_class_predictions(
                 class_id,
-                confidence_threshold
+                confidence_threshold,
+                threshold=threshold,
+                metric_type=metric_type
             )
             metrics = self.calculate_metrics(result)
             metrics["class_id"] = class_id
             metrics["class_name"] = result["class_name"]
-            metrics["matched_ious"] = result["matched_ious"]
+            metrics["matched_scores"] = result["matched_scores"]
             results.append(metrics)
 
         return results
 
-    def get_stat(self, iou=0.5, confidence_thresholds=None, return_stat=True):
-        """
-        Calculates image-level metrics and stores everything inside self.image_evaluator_results.
-        Returns None (Requirement 1).
-        """
+    def get_stat(self, threshold=0.5, metric_type=None, confidence_thresholds=None, return_stat=True):
         if confidence_thresholds is None:
             confidence_thresholds = [0.25, 0.5, 0.75]
 
-        self.iou_threshold = iou
+        self.threshold = threshold
+        if metric_type is not None:
+            self.metric_type = metric_type.lower().strip()
+
+        metric_name = self.metric_type.upper()
         overall_results = []
         per_class_results = []
 
         for confidence_threshold in confidence_thresholds:
-            overall_match = self.match_predictions(confidence_threshold)
+            overall_match = self.match_predictions(
+                confidence_threshold,
+                threshold=self.threshold,
+                metric_type=self.metric_type
+            )
             overall_metrics = self.calculate_metrics(overall_match)
             overall_metrics["confidence_threshold"] = confidence_threshold
-            overall_metrics["matched_ious"] = overall_match["matched_ious"]
+            overall_metrics["matched_scores"] = overall_match["matched_scores"]
             overall_results.append(overall_metrics)
 
-            class_results = self.get_per_class_stat(confidence_threshold)
+            class_results = self.get_per_class_stat(
+                confidence_threshold,
+                threshold=self.threshold,
+                metric_type=self.metric_type
+            )
             for result in class_results:
                 result["confidence_threshold"] = confidence_threshold
                 per_class_results.append(result)
 
-        results = {
+        self.results = {
             "overall": overall_results,
-            "per_class": per_class_results
+            "per_class": per_class_results,
+            "metric_type": self.metric_type,
+            "threshold": self.threshold
         }
 
-        self.results = results
-
         if return_stat:
+            headers = [
+                "Confidence", "GT", "Predictions", "TP", "FP", "FN",
+                "Precision", "Recall", "F1", f"Mean {metric_name}"
+            ]
+
             overall_table = [
                 [
                     result["confidence_threshold"],
@@ -308,20 +344,13 @@ class ImageEvaluator:
                     round(result["precision"], 4),
                     round(result["recall"], 4),
                     round(result["f1_score"], 4),
-                    round(result["mean_iou"], 4)
+                    round(result["mean_score"], 4)
                 ]
                 for result in overall_results
             ]
 
-            print("\nSINGLE-IMAGE OVERALL DETECTION METRICS\n")
-            print(tabulate(
-                overall_table,
-                headers=[
-                    "Confidence", "GT", "Predictions", "TP", "FP", "FN",
-                    "Precision", "Recall", "F1", "Mean IoU"
-                ],
-                tablefmt="grid"
-            ))
+            print(f"\nSINGLE-IMAGE OVERALL DETECTION METRICS ({metric_name}@{self.threshold})\n")
+            print(tabulate(overall_table, headers=headers, tablefmt="grid"))
 
             per_class_table = [
                 [
@@ -335,24 +364,32 @@ class ImageEvaluator:
                     round(result["precision"], 4),
                     round(result["recall"], 4),
                     round(result["f1_score"], 4),
-                    round(result["mean_iou"], 4)
+                    round(result["mean_score"], 4)
                 ]
                 for result in per_class_results
             ]
 
-            print("\nSINGLE-IMAGE PER-CLASS DETECTION METRICS\n")
+            print(f"\nSINGLE-IMAGE PER-CLASS DETECTION METRICS ({metric_name}@{self.threshold})\n")
             print(tabulate(
                 per_class_table,
-                headers=[
-                    "Confidence", "Class Name", "GT", "Predictions", "TP", "FP", "FN",
-                    "Precision", "Recall", "F1", "Mean IoU"
-                ],
+                headers=["Confidence", "Class Name", *headers[1:]],
                 tablefmt="grid"
             ))
 
         return None
 
-    def plot(self, confidence_threshold=0.25, title_prefix="", show=True):
+    def plot(
+        self,
+        confidence_threshold=0.25,
+        title_prefix="",
+        show=True,
+        show_stats=False,
+        threshold=None,
+        metric_type=None
+    ):
+        eff_threshold = threshold if threshold is not None else self.threshold
+        eff_metric = metric_type.lower().strip() if metric_type is not None else self.metric_type
+
         image_path = self.gt_data.get("image_path")
         if image_path and Path(image_path).exists():
             image = Image.open(image_path).convert("RGB")
@@ -364,6 +401,13 @@ class ImageEvaluator:
             for prediction in self.pred_data.get("predictions", [])
             if prediction.get("confidence", 0.0) >= confidence_threshold
         ]
+
+        matched_res = self.match_predictions(
+            confidence_threshold,
+            threshold=eff_threshold,
+            metric_type=eff_metric
+        )
+        img_metrics = self.calculate_metrics(matched_res)
 
         colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
         fig, axes = plt.subplots(1, 2, figsize=(16, 8))
@@ -411,6 +455,29 @@ class ImageEvaluator:
                 bbox=dict(facecolor=color, alpha=0.7, pad=2)
             )
 
+        if show_stats:
+            m_label = eff_metric.upper()
+            stat_box = (
+                f"[{m_label}@{eff_threshold}]\n"
+                f"TP: {img_metrics['tp']} | FP: {img_metrics['fp']} | FN: {img_metrics['fn']}\n"
+                f"Precision: {img_metrics['precision']:.3f}\n"
+                f"Recall: {img_metrics['recall']:.3f}"
+            )
+            axes[1].text(
+                0.02, 0.98, stat_box,
+                transform=axes[1].transAxes,
+                fontsize=10, verticalalignment="top",
+                bbox=dict(boxstyle="round", facecolor="black", alpha=0.8, edgecolor="none"),
+                color="lime", weight="bold"
+            )
+
+            print(f"\n--- Metrics for image: {title_prefix} ({m_label}@{eff_threshold}) ---")
+            print(tabulate([[
+                img_metrics["gt_count"], img_metrics["prediction_count"],
+                img_metrics["tp"], img_metrics["fp"], img_metrics["fn"],
+                round(img_metrics["precision"], 4), round(img_metrics["recall"], 4)
+            ]], headers=["GT", "Preds", "TP", "FP", "FN", "Precision", "Recall"], tablefmt="grid"))
+
         plt.tight_layout()
         if show:
             plt.show()
@@ -429,13 +496,13 @@ class DatasetEvaluator:
         "!=": operator.ne,
     }
 
-    def __init__(self, gt_dir, pred_dir, iou_threshold=0.5, num_workers: Optional[int] = None):
+    def __init__(self, gt_dir, pred_dir, threshold=0.5, metric_type="iou", num_workers: Optional[int] = None):
         self.gt_dir = Path(gt_dir)
         self.pred_dir = Path(pred_dir)
-        self.iou_threshold = iou_threshold
+        self.threshold = threshold
+        self.metric_type = metric_type.lower().strip()
         self.num_workers = num_workers
 
-        # Discovers file pairs without loading full JSON contents into memory
         self.image_files = self._discover_pairs()
         self.image_ids = list(self.image_files.keys())
         self.active_image_ids = list(self.image_ids)
@@ -447,7 +514,7 @@ class DatasetEvaluator:
         self.map_50_95 = None
         self.map_50 = None
         self.all_image_object = {}
-        self.results=None
+        self.results = None
 
     def _discover_pairs(self):
         pairs = {}
@@ -458,33 +525,17 @@ class DatasetEvaluator:
                 pairs[image_id] = (gt_path, pred_path)
         return pairs
 
-    def _load_image_pair(self, image_id):
-        gt_path, pred_path = self.image_files[image_id]
-        with open(gt_path, "r") as f:
-            gt_data = json.load(f)
-        with open(pred_path, "r") as f:
-            pred_data = json.load(f)
-        return gt_data, pred_data
-
-    def _update_label_mapping(self, gt_data, pred_data):
-        for ann in gt_data.get("annotations", []):
-            if "class_id" in ann and "label" in ann:
-                self.label_mapping[ann["class_id"]] = ann["label"]
-        for pred in pred_data.get("predictions", []):
-            if "class_id" in pred and "label" in pred:
-                self.label_mapping.setdefault(pred["class_id"], pred["label"])
-
     @staticmethod
-    def _compute_single_metrics(gt_count, prediction_count, tp, fp, fn, matched_ious):
+    def _compute_single_metrics(gt_count, prediction_count, tp, fp, fn, matched_scores, metric_name="IOU"):
         precision = tp / (tp + fp) if tp + fp > 0 else 0.0
         recall = tp / (tp + fn) if tp + fn > 0 else 0.0
         f1_score = (
             2 * precision * recall / (precision + recall)
             if precision + recall > 0 else 0.0
         )
-        mean_iou = (
-            sum(matched_ious) / len(matched_ious)
-            if matched_ious else 0.0
+        mean_score = (
+            sum(matched_scores) / len(matched_scores)
+            if matched_scores else 0.0
         )
         return {
             "gt_count": gt_count,
@@ -495,14 +546,11 @@ class DatasetEvaluator:
             "precision": precision,
             "recall": recall,
             "f1_score": f1_score,
-            "mean_iou": mean_iou
+            "mean_score": mean_score,
+            "metric_type": metric_name.upper()
         }
 
     def calculate_metrics(self, confidence_thresholds=None, image_objects=None):
-        """
-        Aggregates TP, FP, FN across image objects and calculates/returns
-        the dataset-level (overall) and class-level (per-class) metrics.
-        """
         if confidence_thresholds is None:
             confidence_thresholds = [0.25, 0.5, 0.75]
 
@@ -523,7 +571,7 @@ class DatasetEvaluator:
             ov_tp = 0
             ov_fp = 0
             ov_fn = 0
-            ov_matched_ious = []
+            ov_matched_scores = []
 
             class_accumulators = {
                 cid: {
@@ -532,7 +580,7 @@ class DatasetEvaluator:
                     "tp": 0,
                     "fp": 0,
                     "fn": 0,
-                    "matched_ious": []
+                    "matched_scores": []
                 }
                 for cid in sorted_cids
             }
@@ -549,7 +597,7 @@ class DatasetEvaluator:
                         ov_tp += ov_entry["tp"]
                         ov_fp += ov_entry["fp"]
                         ov_fn += ov_entry["fn"]
-                        ov_matched_ious.extend(ov_entry.get("matched_ious", []))
+                        ov_matched_scores.extend(ov_entry.get("matched_scores", []))
                         break
 
                 for cls_entry in res.get("per_class", []):
@@ -561,10 +609,10 @@ class DatasetEvaluator:
                             class_accumulators[cid]["tp"] += cls_entry["tp"]
                             class_accumulators[cid]["fp"] += cls_entry["fp"]
                             class_accumulators[cid]["fn"] += cls_entry["fn"]
-                            class_accumulators[cid]["matched_ious"].extend(cls_entry.get("matched_ious", []))
+                            class_accumulators[cid]["matched_scores"].extend(cls_entry.get("matched_scores", []))
 
             ov_metrics = self._compute_single_metrics(
-                ov_gt, ov_pred, ov_tp, ov_fp, ov_fn, ov_matched_ious
+                ov_gt, ov_pred, ov_tp, ov_fp, ov_fn, ov_matched_scores, metric_name=self.metric_type
             )
             ov_metrics["confidence_threshold"] = ct
             overall_results.append(ov_metrics)
@@ -573,7 +621,8 @@ class DatasetEvaluator:
                 c_data = class_accumulators[cid]
                 c_metrics = self._compute_single_metrics(
                     c_data["gt_count"], c_data["prediction_count"],
-                    c_data["tp"], c_data["fp"], c_data["fn"], c_data["matched_ious"]
+                    c_data["tp"], c_data["fp"], c_data["fn"], c_data["matched_scores"],
+                    metric_name=self.metric_type
                 )
                 c_metrics["confidence_threshold"] = ct
                 c_metrics["class_id"] = cid
@@ -585,7 +634,6 @@ class DatasetEvaluator:
             "per_class": per_class_results
         }
 
-    # Backward compatibility alias
     _calculate_metrics = calculate_metrics
 
     @staticmethod
@@ -615,31 +663,31 @@ class DatasetEvaluator:
         ap = np.sum((mrec[indices + 1] - mrec[indices]) * mpre[indices + 1])
         return float(ap)
 
-    
     @staticmethod
     def _process_single_image(args):
-        image_id, gt_path, pred_path, iou_thresh, conf_threshs = args
-        img_eval = ImageEvaluator(gt_path, pred_path, iou_threshold=iou_thresh)
-        img_eval.get_stat(iou=iou_thresh, confidence_thresholds=conf_threshs, return_stat=False)
+        image_id, gt_path, pred_path, thresh, metric_t, conf_threshs = args
+        img_eval = ImageEvaluator(gt_path, pred_path, threshold=thresh, metric_type=metric_t)
+        img_eval.get_stat(threshold=thresh, metric_type=metric_t, confidence_thresholds=conf_threshs, return_stat=False)
         return image_id, img_eval
 
-    def get_stat(self, iou=0.5, confidence_thresholds=None, return_stat=True, num_workers=None):
-        """
-        Executes multi-threaded evaluation across all active images using ThreadPoolExecutor and tqdm.
-        """
+    def get_stat(self, threshold=0.5, metric_type=None, confidence_thresholds=None, return_stat=True, num_workers=None):
         if confidence_thresholds is None:
             confidence_thresholds = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 0.9]
-        self.iou_threshold = iou
 
+        self.threshold = threshold
+        if metric_type is not None:
+            self.metric_type = metric_type.lower().strip()
+
+        eval_fn = ImageEvaluator.calculate_ios if self.metric_type == "ios" else ImageEvaluator.calculate_iou
         workers = num_workers if num_workers is not None else self.num_workers
 
-        # Build task parameters for each image
         tasks = [
             (
                 img_id,
                 self.image_files[img_id][0],
                 self.image_files[img_id][1],
-                self.iou_threshold,
+                self.threshold,
+                self.metric_type,
                 confidence_thresholds,
             )
             for img_id in self.active_image_ids
@@ -647,36 +695,30 @@ class DatasetEvaluator:
 
         self.all_image_object = {}
 
-        # Run multi-threaded loading and matching with tqdm progress bar
         if workers == 1:
-            # Single-threaded mode (useful for debugging)
-            for task in tqdm(tasks, desc="Evaluating dataset", unit="img"):
+            for task in tqdm(tasks, desc=f"Evaluating ({self.metric_type.upper()})", unit="img"):
                 image_id, img_eval = self._process_single_image(task)
                 self.all_image_object[image_id] = img_eval
                 self.label_mapping.update(img_eval.label_mapping)
         else:
-            # Multi-threaded concurrent execution
             with ThreadPoolExecutor(max_workers=workers) as executor:
-                # executor.map preserves the original image ordering while running in parallel
                 for image_id, img_eval in tqdm(
                     executor.map(self._process_single_image, tasks),
                     total=len(tasks),
-                    desc="Evaluating dataset",
+                    desc=f"Evaluating ({self.metric_type.upper()})",
                     unit="img",
                 ):
                     self.all_image_object[image_id] = img_eval
                     self.label_mapping.update(img_eval.label_mapping)
 
-        # Dataset-level metric aggregation
         metric_results = self.calculate_metrics(confidence_thresholds=confidence_thresholds)
         overall_results = metric_results["overall"]
         per_class_results = metric_results["per_class"]
 
-        # Compute AP and mAP across the dataset
-        map_iou_thresholds = [round(float(x), 2) for x in np.arange(0.5, 1.0, 0.05)]
+        map_thresholds = [round(float(x), 2) for x in np.arange(0.5, 1.0, 0.05)]
         ap_preds = {}
         class_gt_counts = {}
-        map_ap_preds = {t: {} for t in map_iou_thresholds}
+        map_ap_preds = {t: {} for t in map_thresholds}
         sorted_cids = sorted(self.label_mapping.keys())
 
         for img_id, img_obj in self.all_image_object.items():
@@ -703,45 +745,45 @@ class DatasetEvaluator:
                 preds = pred_by_class.get(cid, [])
                 preds_sorted = sorted(preds, key=lambda x: x.get("confidence", 0.0), reverse=True)
 
-                iou_matrix = np.zeros((len(preds_sorted), len(gts)), dtype=float)
+                score_matrix = np.zeros((len(preds_sorted), len(gts)), dtype=float)
                 for p_idx, p in enumerate(preds_sorted):
                     for g_idx, g in enumerate(gts):
-                        iou_matrix[p_idx, g_idx] = ImageEvaluator.calculate_iou(p["bbox"], g)
+                        score_matrix[p_idx, g_idx] = eval_fn(p["bbox"], g)
 
                 matched_gts_default = set()
                 ap_preds.setdefault(cid, [])
                 for p_idx, p in enumerate(preds_sorted):
-                    best_iou = 0.0
+                    best_score = 0.0
                     best_gt_idx = None
                     for g_idx in range(len(gts)):
                         if g_idx in matched_gts_default:
                             continue
-                        iou_val = iou_matrix[p_idx, g_idx]
-                        if iou_val > best_iou:
-                            best_iou = iou_val
+                        score_val = score_matrix[p_idx, g_idx]
+                        if score_val > best_score:
+                            best_score = score_val
                             best_gt_idx = g_idx
 
                     is_tp = 0
-                    if best_gt_idx is not None and best_iou >= self.iou_threshold:
+                    if best_gt_idx is not None and best_score >= self.threshold:
                         matched_gts_default.add(best_gt_idx)
                         is_tp = 1
                     ap_preds[cid].append((p.get("confidence", 0.0), is_tp))
 
-                for t in map_iou_thresholds:
+                for t in map_thresholds:
                     map_ap_preds[t].setdefault(cid, [])
                     matched_gts_t = set()
                     for p_idx, p in enumerate(preds_sorted):
-                        best_iou_t = 0.0
+                        best_score_t = 0.0
                         best_gt_idx_t = None
                         for g_idx in range(len(gts)):
                             if g_idx in matched_gts_t:
                                 continue
-                            iou_val = iou_matrix[p_idx, g_idx]
-                            if iou_val > best_iou_t:
-                                best_iou_t = iou_val
+                            score_val = score_matrix[p_idx, g_idx]
+                            if score_val > best_score_t:
+                                best_score_t = score_val
                                 best_gt_idx_t = g_idx
 
-                        is_tp_t = 1 if (best_gt_idx_t is not None and best_iou_t >= t) else 0
+                        is_tp_t = 1 if (best_gt_idx_t is not None and best_score_t >= t) else 0
                         if is_tp_t:
                             matched_gts_t.add(best_gt_idx_t)
                         map_ap_preds[t][cid].append((p.get("confidence", 0.0), is_tp_t))
@@ -752,7 +794,8 @@ class DatasetEvaluator:
             ap_results.append({
                 "class_id": cid,
                 "class_name": self.label_mapping.get(cid, str(cid)),
-                "iou_threshold": self.iou_threshold,
+                "threshold": self.threshold,
+                "metric_type": self.metric_type.upper(),
                 "ap": ap_val,
             })
 
@@ -760,7 +803,7 @@ class DatasetEvaluator:
         map_50 = float(np.mean(valid_aps)) if valid_aps else 0.0
 
         map_scores = []
-        for t in map_iou_thresholds:
+        for t in map_thresholds:
             t_aps = []
             for cid in sorted_cids:
                 ap_t = self._compute_ap_from_matches(map_ap_preds[t].get(cid, []), class_gt_counts.get(cid, 0))
@@ -770,7 +813,8 @@ class DatasetEvaluator:
                 map_scores.append(float(np.mean(t_aps)))
         map_50_95 = float(np.mean(map_scores)) if map_scores else 0.0
 
-        results = {
+        metric_name = self.metric_type.upper()
+        self.results = {
             "overall": overall_results,
             "per_class": per_class_results,
             "ap": ap_results,
@@ -778,56 +822,52 @@ class DatasetEvaluator:
             "map_50_95": map_50_95,
         }
 
-        self.results = results
-
+        col_score = f"Mean {metric_name}"
         self.overall_df = pd.DataFrame([
             [
                 r["confidence_threshold"], r["gt_count"], r["prediction_count"],
                 r["tp"], r["fp"], r["fn"],
                 round(r["precision"], 4), round(r["recall"], 4),
-                round(r["f1_score"], 4), round(r["mean_iou"], 4),
+                round(r["f1_score"], 4), round(r["mean_score"], 4),
             ]
             for r in overall_results
-        ], columns=["Confidence", "GT", "Predictions", "TP", "FP", "FN", "Precision", "Recall", "F1", "Mean IoU"])
+        ], columns=["Confidence", "GT", "Predictions", "TP", "FP", "FN", "Precision", "Recall", "F1", col_score])
 
         self.per_class_df = pd.DataFrame([
             [
                 r["confidence_threshold"], r["class_name"], r["gt_count"], r["prediction_count"],
                 r["tp"], r["fp"], r["fn"],
                 round(r["precision"], 4), round(r["recall"], 4),
-                round(r["f1_score"], 4), round(r["mean_iou"], 4),
+                round(r["f1_score"], 4), round(r["mean_score"], 4),
             ]
             for r in per_class_results
-        ], columns=["Confidence", "Class Name", "GT", "Predictions", "TP", "FP", "FN", "Precision", "Recall", "F1", "Mean IoU"])
+        ], columns=["Confidence", "Class Name", "GT", "Predictions", "TP", "FP", "FN", "Precision", "Recall", "F1", col_score])
 
         self.ap_df = pd.DataFrame([
-            [r["class_name"], r["iou_threshold"], round(r["ap"], 4) if r["ap"] is not None else None]
+            [r["class_name"], r["metric_type"], r["threshold"], round(r["ap"], 4) if r["ap"] is not None else None]
             for r in ap_results
-        ], columns=["Class Name", "IoU", "AP"])
+        ], columns=["Class Name", "Metric", "Threshold", "AP"])
 
         if return_stat:
-            print("\nDATASET-LEVEL OVERALL METRICS\n")
+            print(f"\nDATASET-LEVEL OVERALL METRICS ({metric_name}@{self.threshold})\n")
             print(tabulate(self.overall_df.values, headers=self.overall_df.columns, tablefmt="grid"))
-            print("\nDATASET-LEVEL PER-CLASS METRICS\n")
+            print(f"\nDATASET-LEVEL PER-CLASS METRICS ({metric_name}@{self.threshold})\n")
             print(tabulate(self.per_class_df.values, headers=self.per_class_df.columns, tablefmt="grid"))
-            print("\nDATASET-LEVEL AP\n")
+            print(f"\nDATASET-LEVEL AP ({metric_name})\n")
             print(tabulate(self.ap_df.values, headers=self.ap_df.columns, tablefmt="grid"))
-            print("\nDATASET-LEVEL mAP\n")
-            print(tabulate([["mAP@0.5", round(map_50, 4)], ["mAP@0.5:0.95", round(map_50_95, 4)]], headers=["Metric", "Score"], tablefmt="grid"))
+            print(f"\nDATASET-LEVEL mAP ({metric_name})\n")
+            print(tabulate([
+                [f"mAP@{self.threshold}", round(map_50, 4)],
+                ["mAP@0.5:0.95", round(map_50_95, 4)]
+            ], headers=["Metric", "Score"], tablefmt="grid"))
 
         return None
 
     def filter(self, class_names, model_confidence_threshold, metric, eq, class_confidence_threshold):
-        """
-        Runs loop on all self.all_image_object and based on class metric eq,
-        extracts matching image objects.
-        IMMUTABLE: Returns a NEW DatasetEvaluator instance containing only the matching images.
-        """
         if eq not in self.OPS:
             raise ValueError(f"Unsupported operator '{eq}'. Supported: {list(self.OPS.keys())}")
         op_func = self.OPS[eq]
 
-        # Ensure all_image_object is populated
         if not self.all_image_object:
             self.get_stat(return_stat=False)
 
@@ -849,15 +889,19 @@ class DatasetEvaluator:
         metric_key = metric.lower().strip()
         if metric_key == "f1":
             metric_key = "f1_score"
-        elif metric_key == "iou":
-            metric_key = "mean_iou"
+        elif metric_key in ("iou", "ios", "overlap"):
+            metric_key = "mean_score"
 
-        # Loop over self.all_image_object directly
         filtered_objects = {}
         for image_id, img_obj in self.all_image_object.items():
             matched = False
             for cid in target_class_ids:
-                class_res = img_obj.match_class_predictions(cid, model_confidence_threshold)
+                class_res = img_obj.match_class_predictions(
+                    cid,
+                    model_confidence_threshold,
+                    threshold=self.threshold,
+                    metric_type=self.metric_type
+                )
                 if class_res["gt_count"] == 0 and class_res["prediction_count"] == 0:
                     continue
 
@@ -872,7 +916,6 @@ class DatasetEvaluator:
 
         print(f"Filter matched {len(filtered_objects)} / {len(self.all_image_object)} images.")
 
-        # Return fresh copy configured with the filtered image objects
         new_evaluator = copy.copy(self)
         new_evaluator.all_image_object = filtered_objects
         new_evaluator.active_image_ids = list(filtered_objects.keys())
@@ -889,12 +932,10 @@ class DatasetEvaluator:
         class_names=None,
         model_confidence_threshold=None,
         show=True,
+        show_stats=False,
+        threshold=None,
+        metric_type=None
     ):
-        """
-        Plots sample images. If class_names is provided, it only samples
-        images where that class appears in Ground Truth or Predictions at the given confidence.
-        """
-        # Ensure image objects are loaded in memory
         if not self.all_image_object:
             self.get_stat(return_stat=False)
 
@@ -902,23 +943,22 @@ class DatasetEvaluator:
             print("No image objects available to plot.")
             return
 
-        # Determine effective confidence threshold
         plot_conf = (
             model_confidence_threshold
             if model_confidence_threshold is not None
             else confidence_threshold
         )
+        eff_threshold = threshold if threshold is not None else self.threshold
+        eff_metric = metric_type if metric_type is not None else self.metric_type
 
         candidate_items = list(self.all_image_object.items())
 
-        # If class_names is specified, filter to images relevant to that class
         if class_names is not None:
             if not isinstance(class_names, (list, tuple, set)):
                 class_names_list = [class_names]
             else:
                 class_names_list = list(class_names)
 
-            # Map class names to class IDs
             name_to_cid = {v.lower(): k for k, v in self.label_mapping.items()}
             target_class_ids = set()
             for c in class_names_list:
@@ -931,7 +971,6 @@ class DatasetEvaluator:
                     if c_lower in name_to_cid:
                         target_class_ids.add(name_to_cid[c_lower])
 
-            # Keep only images where the class appears in GT or in Predictions (>= plot_conf)
             filtered_candidates = []
             for image_id, img_obj in candidate_items:
                 has_gt = any(
@@ -943,17 +982,14 @@ class DatasetEvaluator:
                     and p.get("confidence", 0.0) >= plot_conf
                     for p in img_obj.pred_data.get("predictions", [])
                 )
-
                 if has_gt or has_pred:
                     filtered_candidates.append((image_id, img_obj))
 
             candidate_items = filtered_candidates
-
             if not candidate_items:
                 print(f"No images found containing class '{class_names}' at confidence >= {plot_conf}")
                 return
 
-        # Sample images
         num_samples = min(num_samples, len(candidate_items))
         if random_sample:
             sampled_items = random.sample(candidate_items, num_samples)
@@ -966,4 +1002,7 @@ class DatasetEvaluator:
                 confidence_threshold=plot_conf,
                 title_prefix=f"[{image_id}]{title_suffix} ",
                 show=show,
+                show_stats=show_stats,
+                threshold=eff_threshold,
+                metric_type=eff_metric
             )
