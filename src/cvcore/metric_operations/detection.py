@@ -470,13 +470,13 @@ class ImageEvaluator:
                 bbox=dict(boxstyle="round", facecolor="black", alpha=0.8, edgecolor="none"),
                 color="lime", weight="bold"
             )
-
-            print(f"\n--- Metrics for image: {title_prefix} ({m_label}@{eff_threshold}) ---")
+            print(f"\n--- Metrics for image: {title_prefix} (Conf: {confidence_threshold}, {m_label}@{eff_threshold}) ---")
             print(tabulate([[
+                confidence_threshold,
                 img_metrics["gt_count"], img_metrics["prediction_count"],
                 img_metrics["tp"], img_metrics["fp"], img_metrics["fn"],
                 round(img_metrics["precision"], 4), round(img_metrics["recall"], 4)
-            ]], headers=["GT", "Preds", "TP", "FP", "FN", "Precision", "Recall"], tablefmt="grid"))
+            ]], headers=["Conf_Threshold","GT", "Preds", "TP", "FP", "FN", "Precision", "Recall"], tablefmt="grid"))
 
         plt.tight_layout()
         if show:
