@@ -957,89 +957,89 @@ class DatasetEvaluator:
         new_evaluator.per_class_df = None
         new_evaluator.ap_df = None
         return new_evaluator
-def plot(
-    self,
-    num_samples=5,
-    confidence_threshold=None,  # Defaults dynamically to self.threshold
-    random_sample=True,
-    class_names=None,
-    model_confidence_threshold=None,
-    show=True,
-    show_stats=False,
-    threshold=None,
-    metric_type=None
-):
-    if not self.all_image_object:
-        self.get_stat(return_stat=False)
+    def plot(
+        self,
+        num_samples=5,
+        confidence_threshold=None,  # Defaults dynamically to self.threshold
+        random_sample=True,
+        class_names=None,
+        model_confidence_threshold=None,
+        show=True,
+        show_stats=False,
+        threshold=None,
+        metric_type=None
+    ):
+        if not self.all_image_object:
+            self.get_stat(return_stat=False)
 
-    if not self.all_image_object:
-        print("No image objects available to plot.")
-        return
-
-    # Choose plotting confidence threshold
-    if model_confidence_threshold is not None:
-        plot_conf = model_confidence_threshold
-    elif confidence_threshold is not None:
-        plot_conf = confidence_threshold
-    else:
-        plot_conf = 0.2  # Match typical lower evaluation bound
-
-    eff_threshold = threshold if threshold is not None else self.threshold
-    eff_metric = metric_type if metric_type is not None else self.metric_type
-
-    candidate_items = list(self.all_image_object.items())
-
-    if class_names is not None:
-        if not isinstance(class_names, (list, tuple, set)):
-            class_names_list = [class_names]
-        else:
-            class_names_list = list(class_names)
-
-        name_to_cid = {v.lower(): k for k, v in self.label_mapping.items()}
-        target_class_ids = set()
-        for c in class_names_list:
-            if isinstance(c, int):
-                target_class_ids.add(c)
-            elif str(c).isdigit():
-                target_class_ids.add(int(c))
-            elif isinstance(c, str):
-                c_lower = c.strip().lower()
-                if c_lower in name_to_cid:
-                    target_class_ids.add(name_to_cid[c_lower])
-
-        filtered_candidates = []
-        for image_id, img_obj in candidate_items:
-            has_gt = any(
-                ann.get("class_id") in target_class_ids
-                for ann in img_obj.gt_data.get("annotations", [])
-            )
-            has_pred = any(
-                p.get("class_id") in target_class_ids
-                and p.get("confidence", 0.0) >= plot_conf
-                for p in img_obj.pred_data.get("predictions", [])
-            )
-            if has_gt or has_pred:
-                filtered_candidates.append((image_id, img_obj))
-
-        candidate_items = filtered_candidates
-        if not candidate_items:
-            print(f"No images found containing class '{class_names}' at confidence >= {plot_conf}")
+        if not self.all_image_object:
+            print("No image objects available to plot.")
             return
 
-    num_samples = min(num_samples, len(candidate_items))
-    if random_sample:
-        sampled_items = random.sample(candidate_items, num_samples)
-    else:
-        sampled_items = candidate_items[:num_samples]
+        # Choose plotting confidence threshold
+        if model_confidence_threshold is not None:
+            plot_conf = model_confidence_threshold
+        elif confidence_threshold is not None:
+            plot_conf = confidence_threshold
+        else:
+            plot_conf = 0.2  # Match typical lower evaluation bound
 
-    title_suffix = f" ({class_names})" if class_names is not None else ""
-    for image_id, img_obj in sampled_items:
-        img_obj.plot(
-            confidence_threshold=plot_conf,
-            title_prefix=f"[{image_id}]{title_suffix} ",
-            show=show,
-            show_stats=show_stats,
-            threshold=eff_threshold,
-            metric_type=eff_metric,
-            class_names=class_names  # <-- Forwarded class_names to ImageEvaluator
-        )
+        eff_threshold = threshold if threshold is not None else self.threshold
+        eff_metric = metric_type if metric_type is not None else self.metric_type
+
+        candidate_items = list(self.all_image_object.items())
+
+        if class_names is not None:
+            if not isinstance(class_names, (list, tuple, set)):
+                class_names_list = [class_names]
+            else:
+                class_names_list = list(class_names)
+
+            name_to_cid = {v.lower(): k for k, v in self.label_mapping.items()}
+            target_class_ids = set()
+            for c in class_names_list:
+                if isinstance(c, int):
+                    target_class_ids.add(c)
+                elif str(c).isdigit():
+                    target_class_ids.add(int(c))
+                elif isinstance(c, str):
+                    c_lower = c.strip().lower()
+                    if c_lower in name_to_cid:
+                        target_class_ids.add(name_to_cid[c_lower])
+
+            filtered_candidates = []
+            for image_id, img_obj in candidate_items:
+                has_gt = any(
+                    ann.get("class_id") in target_class_ids
+                    for ann in img_obj.gt_data.get("annotations", [])
+                )
+                has_pred = any(
+                    p.get("class_id") in target_class_ids
+                    and p.get("confidence", 0.0) >= plot_conf
+                    for p in img_obj.pred_data.get("predictions", [])
+                )
+                if has_gt or has_pred:
+                    filtered_candidates.append((image_id, img_obj))
+
+            candidate_items = filtered_candidates
+            if not candidate_items:
+                print(f"No images found containing class '{class_names}' at confidence >= {plot_conf}")
+                return
+
+        num_samples = min(num_samples, len(candidate_items))
+        if random_sample:
+            sampled_items = random.sample(candidate_items, num_samples)
+        else:
+            sampled_items = candidate_items[:num_samples]
+
+        title_suffix = f" ({class_names})" if class_names is not None else ""
+        for image_id, img_obj in sampled_items:
+            img_obj.plot(
+                confidence_threshold=plot_conf,
+                title_prefix=f"[{image_id}]{title_suffix} ",
+                show=show,
+                show_stats=show_stats,
+                threshold=eff_threshold,
+                metric_type=eff_metric,
+                class_names=class_names  # <-- Forwarded class_names to ImageEvaluator
+            )
