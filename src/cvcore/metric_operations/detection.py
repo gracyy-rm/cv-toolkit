@@ -379,14 +379,15 @@ class ImageEvaluator:
         return None
 
     def plot(
-        self,
-        confidence_threshold=0.25,
-        title_prefix="",
-        show=True,
-        show_stats=False,
-        threshold=None,
-        metric_type=None
-    ):
+    self,
+    confidence_threshold=0.25,
+    title_prefix="",
+    show=True,
+    show_stats=False,
+    threshold=None,
+    metric_type=None,
+    class_names=None  # <-- Added: filter visualizer to specific classes
+):
         eff_threshold = threshold if threshold is not None else self.threshold
         eff_metric = metric_type.lower().strip() if metric_type is not None else self.metric_type
 
@@ -396,17 +397,50 @@ class ImageEvaluator:
         else:
             image = Image.new("RGB", (640, 640), color=(245, 245, 245))
 
-        predictions = [
-            prediction
-            for prediction in self.pred_data.get("predictions", [])
-            if prediction.get("confidence", 0.0) >= confidence_threshold
+        # Resolve target_cids if class_names is provided
+        target_cids = None
+        if class_names is not None:
+            if not isinstance(class_names, (list, tuple, set)):
+                class_names = [class_names]
+            name_to_cid = {str(v).lower(): k for k, v in self.label_mapping.items()}
+            target_cids = set()
+            for c in class_names:
+                if isinstance(c, int):
+                    target_cids.add(c)
+                elif str(c).isdigit():
+                    target_cids.add(int(c))
+                elif str(c).lower() in name_to_cid:
+                    target_cids.add(name_to_cid[str(c).lower()])
+
+        # Filter GT annotations and predictions by target_cids
+        all_annotations = self.gt_data.get("annotations", [])
+        annotations = [
+            ann for ann in all_annotations
+            if target_cids is None or ann.get("class_id") in target_cids
         ]
 
-        matched_res = self.match_predictions(
-            confidence_threshold,
-            threshold=eff_threshold,
-            metric_type=eff_metric
-        )
+        all_predictions = self.pred_data.get("predictions", [])
+        predictions = [
+            p for p in all_predictions
+            if p.get("confidence", 0.0) >= confidence_threshold
+            and (target_cids is None or p.get("class_id") in target_cids)
+        ]
+
+        # Calculate metrics: class-specific if a single target class is chosen, else overall
+        if target_cids is not None and len(target_cids) == 1:
+            target_cid = list(target_cids)[0]
+            matched_res = self.match_class_predictions(
+                target_cid,
+                confidence_threshold,
+                threshold=eff_threshold,
+                metric_type=eff_metric
+            )
+        else:
+            matched_res = self.match_predictions(
+                confidence_threshold,
+                threshold=eff_threshold,
+                metric_type=eff_metric
+            )
         img_metrics = self.calculate_metrics(matched_res)
 
         colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
@@ -416,7 +450,7 @@ class ImageEvaluator:
         axes[0].set_title(f"{title_prefix}Ground Truth".strip())
         axes[0].axis("off")
 
-        for annotation in self.gt_data.get("annotations", []):
+        for annotation in annotations:
             x1, y1, x2, y2 = annotation["bbox"]
             class_id = annotation["class_id"]
             class_name = annotation.get("label", str(class_id))
@@ -457,8 +491,9 @@ class ImageEvaluator:
 
         if show_stats:
             m_label = eff_metric.upper()
+            scope_label = f" ({class_names[0]})" if target_cids and len(target_cids) == 1 else ""
             stat_box = (
-                f"[{m_label}@{eff_threshold}]\n"
+                f"[{m_label}@{eff_threshold}{scope_label}]\n"
                 f"TP: {img_metrics['tp']} | FP: {img_metrics['fp']} | FN: {img_metrics['fn']}\n"
                 f"Precision: {img_metrics['precision']:.3f}\n"
                 f"Recall: {img_metrics['recall']:.3f}"
@@ -476,13 +511,12 @@ class ImageEvaluator:
                 img_metrics["gt_count"], img_metrics["prediction_count"],
                 img_metrics["tp"], img_metrics["fp"], img_metrics["fn"],
                 round(img_metrics["precision"], 4), round(img_metrics["recall"], 4)
-            ]], headers=["Conf_Threshold","GT", "Preds", "TP", "FP", "FN", "Precision", "Recall"], tablefmt="grid"))
+            ]], headers=["Conf_Threshold", "GT", "Preds", "TP", "FP", "FN", "Precision", "Recall"], tablefmt="grid"))
 
         plt.tight_layout()
         if show:
             plt.show()
         plt.close(fig)
-
 
 class DatasetEvaluator:
 
@@ -923,86 +957,89 @@ class DatasetEvaluator:
         new_evaluator.per_class_df = None
         new_evaluator.ap_df = None
         return new_evaluator
+def plot(
+    self,
+    num_samples=5,
+    confidence_threshold=None,  # Defaults dynamically to self.threshold
+    random_sample=True,
+    class_names=None,
+    model_confidence_threshold=None,
+    show=True,
+    show_stats=False,
+    threshold=None,
+    metric_type=None
+):
+    if not self.all_image_object:
+        self.get_stat(return_stat=False)
 
-    def plot(
-        self,
-        num_samples=5,
-        confidence_threshold=0.25,
-        random_sample=True,
-        class_names=None,
-        model_confidence_threshold=None,
-        show=True,
-        show_stats=False,
-        threshold=None,
-        metric_type=None
-    ):
-        if not self.all_image_object:
-            self.get_stat(return_stat=False)
+    if not self.all_image_object:
+        print("No image objects available to plot.")
+        return
 
-        if not self.all_image_object:
-            print("No image objects available to plot.")
+    # Choose plotting confidence threshold
+    if model_confidence_threshold is not None:
+        plot_conf = model_confidence_threshold
+    elif confidence_threshold is not None:
+        plot_conf = confidence_threshold
+    else:
+        plot_conf = 0.2  # Match typical lower evaluation bound
+
+    eff_threshold = threshold if threshold is not None else self.threshold
+    eff_metric = metric_type if metric_type is not None else self.metric_type
+
+    candidate_items = list(self.all_image_object.items())
+
+    if class_names is not None:
+        if not isinstance(class_names, (list, tuple, set)):
+            class_names_list = [class_names]
+        else:
+            class_names_list = list(class_names)
+
+        name_to_cid = {v.lower(): k for k, v in self.label_mapping.items()}
+        target_class_ids = set()
+        for c in class_names_list:
+            if isinstance(c, int):
+                target_class_ids.add(c)
+            elif str(c).isdigit():
+                target_class_ids.add(int(c))
+            elif isinstance(c, str):
+                c_lower = c.strip().lower()
+                if c_lower in name_to_cid:
+                    target_class_ids.add(name_to_cid[c_lower])
+
+        filtered_candidates = []
+        for image_id, img_obj in candidate_items:
+            has_gt = any(
+                ann.get("class_id") in target_class_ids
+                for ann in img_obj.gt_data.get("annotations", [])
+            )
+            has_pred = any(
+                p.get("class_id") in target_class_ids
+                and p.get("confidence", 0.0) >= plot_conf
+                for p in img_obj.pred_data.get("predictions", [])
+            )
+            if has_gt or has_pred:
+                filtered_candidates.append((image_id, img_obj))
+
+        candidate_items = filtered_candidates
+        if not candidate_items:
+            print(f"No images found containing class '{class_names}' at confidence >= {plot_conf}")
             return
 
-        plot_conf = (
-            model_confidence_threshold
-            if model_confidence_threshold is not None
-            else confidence_threshold
+    num_samples = min(num_samples, len(candidate_items))
+    if random_sample:
+        sampled_items = random.sample(candidate_items, num_samples)
+    else:
+        sampled_items = candidate_items[:num_samples]
+
+    title_suffix = f" ({class_names})" if class_names is not None else ""
+    for image_id, img_obj in sampled_items:
+        img_obj.plot(
+            confidence_threshold=plot_conf,
+            title_prefix=f"[{image_id}]{title_suffix} ",
+            show=show,
+            show_stats=show_stats,
+            threshold=eff_threshold,
+            metric_type=eff_metric,
+            class_names=class_names  # <-- Forwarded class_names to ImageEvaluator
         )
-        eff_threshold = threshold if threshold is not None else self.threshold
-        eff_metric = metric_type if metric_type is not None else self.metric_type
-
-        candidate_items = list(self.all_image_object.items())
-
-        if class_names is not None:
-            if not isinstance(class_names, (list, tuple, set)):
-                class_names_list = [class_names]
-            else:
-                class_names_list = list(class_names)
-
-            name_to_cid = {v.lower(): k for k, v in self.label_mapping.items()}
-            target_class_ids = set()
-            for c in class_names_list:
-                if isinstance(c, int):
-                    target_class_ids.add(c)
-                elif str(c).isdigit():
-                    target_class_ids.add(int(c))
-                elif isinstance(c, str):
-                    c_lower = c.strip().lower()
-                    if c_lower in name_to_cid:
-                        target_class_ids.add(name_to_cid[c_lower])
-
-            filtered_candidates = []
-            for image_id, img_obj in candidate_items:
-                has_gt = any(
-                    ann.get("class_id") in target_class_ids
-                    for ann in img_obj.gt_data.get("annotations", [])
-                )
-                has_pred = any(
-                    p.get("class_id") in target_class_ids
-                    and p.get("confidence", 0.0) >= plot_conf
-                    for p in img_obj.pred_data.get("predictions", [])
-                )
-                if has_gt or has_pred:
-                    filtered_candidates.append((image_id, img_obj))
-
-            candidate_items = filtered_candidates
-            if not candidate_items:
-                print(f"No images found containing class '{class_names}' at confidence >= {plot_conf}")
-                return
-
-        num_samples = min(num_samples, len(candidate_items))
-        if random_sample:
-            sampled_items = random.sample(candidate_items, num_samples)
-        else:
-            sampled_items = candidate_items[:num_samples]
-
-        title_suffix = f" ({class_names})" if class_names is not None else ""
-        for image_id, img_obj in sampled_items:
-            img_obj.plot(
-                confidence_threshold=plot_conf,
-                title_prefix=f"[{image_id}]{title_suffix} ",
-                show=show,
-                show_stats=show_stats,
-                threshold=eff_threshold,
-                metric_type=eff_metric
-            )
